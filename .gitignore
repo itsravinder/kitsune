@@ -1,0 +1,51 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+*.csproj.user
+appsettings.Development.json
+appsettings.Production.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env
+*.egg-info/
+dist/
+build/
+
+# Node / React
+node_modules/
+npm-debug.log*
+yarn-error.log
+.pnp/
+.pnp.js
+ui/build/
+ui/.env.local
+ui/.env.development.local
+ui/.env.test.local
+ui/.env.production.local
+
+# Docker
+.dockerignore
+
+# IDE
+.idea/
+*.swp
+*.swo
+.vscode/settings.json
+.vscode/launch.json
+Thumbs.db
+.DS_Store
+
+# Secrets
+*.pfx
+*.key
+secrets.json
