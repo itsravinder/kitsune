@@ -1,8 +1,15 @@
 version: "3.9"
 
+# ============================================================
+# KITSUNE – Docker Compose (All Services)
+# Usage: docker compose up -d
+# ============================================================
+
 services:
+  # ── SQL Server ─────────────────────────────────────────────
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: kitsune-sqlserver
     environment:
       SA_PASSWORD: "YourStrong@Passw0rd"
       ACCEPT_EULA: "Y"
@@ -12,70 +19,121 @@ services:
     volumes:
       - sqldata:/var/opt/mssql
     healthcheck:
-      test: /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "YourStrong@Passw0rd" -Q "SELECT 1" || exit 1
-      interval: 10s
+      test: /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "YourStrong@Passw0rd" -Q "SELECT 1" -C || exit 1
+      interval: 15s
+      timeout: 10s
       retries: 10
-      start_period: 30s
+      start_period: 45s
+    restart: unless-stopped
 
+  # ── MongoDB ───────────────────────────────────────────────
   mongodb:
     image: mongo:7
+    container_name: kitsune-mongodb
     ports:
       - "27017:27017"
     volumes:
       - mongodata:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
 
+  # ── Ollama (AI model server) ──────────────────────────────
   ollama:
     image: ollama/ollama:latest
+    container_name: kitsune-ollama
     ports:
       - "11434:11434"
     volumes:
       - ollama_models:/root/.ollama
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    # Uncomment for GPU support:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
 
+  # ── Python AI Service ─────────────────────────────────────
   ai-service:
     build:
       context: ./ai-service
       dockerfile: Dockerfile
+    container_name: kitsune-ai
     ports:
       - "8000:8000"
     environment:
       - OLLAMA_BASE_URL=http://ollama:11434
     depends_on:
-      - ollama
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
 
+  # ── .NET Backend ──────────────────────────────────────────
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    container_name: kitsune-backend
     ports:
       - "5000:5000"
     environment:
-      - ConnectionStrings__SqlServer=Server=sqlserver;Database=KitsuneDB;User Id=sa;Password=YourStrong@Passw0rd;TrustServerCertificate=True;
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__SqlServer=Server=sqlserver,1433;Database=KitsuneDB;User Id=sa;Password=YourStrong@Passw0rd;TrustServerCertificate=True;MultipleActiveResultSets=True;
+      - ConnectionStrings__MongoDB=mongodb://mongodb:27017
       - AiService__BaseUrl=http://ai-service:8000
+      - Cors__AllowedOrigin=http://localhost:3000
     depends_on:
       sqlserver:
         condition: service_healthy
+      ai-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
 
+  # ── React UI ──────────────────────────────────────────────
   ui:
     build:
       context: ./ui
       dockerfile: Dockerfile
+    container_name: kitsune-ui
     ports:
       - "3000:80"
     environment:
       - REACT_APP_BACKEND_URL=http://localhost:5000
       - REACT_APP_AI_URL=http://localhost:8000
     depends_on:
-      - backend
-      - ai-service
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   sqldata:
   mongodata:
   ollama_models:
+
+networks:
+  default:
+    name: kitsune-network

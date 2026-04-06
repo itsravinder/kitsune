@@ -1,258 +1,226 @@
 # 🦊 KITSUNE – AI Database Intelligence System
 
-An enterprise-grade AI-powered database management tool with natural language → SQL generation,
-dependency validation, versioning, safe preview execution, and risk analysis.
+Enterprise-grade AI-powered database management: NL→SQL/NoSQL, dependency validation, versioning, safe preview, risk analysis, query optimization, scheduled backups, MongoDB support, and more.
 
 ---
 
-## 📁 Project Structure
+## 📁 Complete Project Structure
 
 ```
 kitsune/
-├── backend/                    # .NET 8 Web API
+├── backend/                                  # .NET 8 Web API
 │   ├── Controllers/
-│   │   └── KitsuneControllers.cs   # Validate / Backup / Preview / Rollback endpoints
+│   │   ├── KitsuneControllers.cs             # Validate / Backup / Preview / Rollback
+│   │   ├── SchemaAuditControllers.cs         # Schema / Audit
+│   │   ├── ApplyChangeSummaryControllers.cs  # Apply / Diff / Connections
+│   │   ├── OptimizerController.cs            # Query plan + missing indexes
+│   │   └── ExtendedControllers.cs            # MongoDB / Schedules / Prefs / Health
 │   ├── Services/
 │   │   ├── DependencyValidationService.cs
 │   │   ├── BackupVersioningService.cs
-│   │   └── PreviewExecutionService.cs
-│   ├── Models/
-│   │   └── Models.cs
-│   ├── Data/
-│   │   └── ValidationQueries.sql   # Reference SQL queries
+│   │   ├── PreviewExecutionService.cs
+│   │   ├── SchemaExtractionService.cs
+│   │   ├── AuditLogService.cs
+│   │   ├── ApplyService.cs
+│   │   ├── ChangeSummaryService.cs
+│   │   ├── ConnectionManagerService.cs
+│   │   ├── QueryOptimizerService.cs
+│   │   ├── MongoQueryService.cs
+│   │   ├── ScheduledBackupService.cs
+│   │   └── UserPreferencesService.cs
+│   ├── Models/Models.cs
+│   ├── Data/ValidationQueries.sql
 │   ├── Program.cs
 │   ├── appsettings.json
+│   ├── appsettings.Development.json
 │   └── Kitsune.Backend.csproj
-│
-├── ai-service/                 # Python FastAPI
-│   ├── main.py                 # Model routing + Ollama integration
-│   └── requirements.txt
-│
-└── ui/                         # React (SSMS-like interface)
-    ├── src/
-    │   ├── KitsuneApp.jsx      # Main UI component
-    │   └── services/api.js     # API layer
-    └── package.json
+├── ai-service/
+│   ├── main.py
+│   ├── requirements.txt
+│   ├── Dockerfile
+│   └── .env.example
+├── ui/
+│   ├── src/
+│   │   ├── KitsuneApp.jsx
+│   │   ├── App.js / index.js
+│   │   ├── hooks/useKitsune.js
+│   │   ├── components/
+│   │   │   ├── SharedComponents.jsx
+│   │   │   ├── LeftPane.jsx
+│   │   │   └── Panels.jsx
+│   │   └── services/api.js
+│   ├── public/index.html
+│   ├── package.json / Dockerfile / nginx.conf
+│   └── .env.example
+├── setup-kitsune.ps1      # Windows one-click setup
+├── setup-kitsune.sh       # Linux/Mac one-click setup
+├── docker-compose.yml
+├── .gitignore
+└── README.md
 ```
 
 ---
 
 ## 🚀 Quick Start
 
-### 1. Prerequisites
+### One-command setup
 
-| Tool              | Version  |
-|-------------------|----------|
-| .NET SDK          | 8.0+     |
-| Python            | 3.11+    |
-| Node.js           | 18+      |
-| SQL Server        | 2019+    |
-| Ollama            | latest   |
+**Windows (PowerShell):**
+```powershell
+pwsh -ExecutionPolicy Bypass -File setup-kitsune.ps1
+```
 
-### 2. Pull AI Models via Ollama
-
+**Linux/Mac:**
 ```bash
+chmod +x setup-kitsune.sh && ./setup-kitsune.sh
+```
+
+### Manual start
+```bash
+# Pull AI models first
 ollama pull defog/sqlcoder
 ollama pull qwen3-coder:480b-cloud
-```
 
-### 3. Backend (.NET)
+# Backend (.NET 8)
+cd backend && dotnet restore && dotnet run
+# http://localhost:5000/swagger
 
-```bash
-cd backend
-# Update connection string in appsettings.json
-dotnet restore
-dotnet run
-# Swagger UI: http://localhost:5000/swagger
-```
+# AI Service (Python)
+cd ai-service && pip install -r requirements.txt
+uvicorn main:app --port 8000 --reload
 
-### 4. AI Service (Python)
+# UI (React)
+cd ui && npm install && npm start
+# http://localhost:3000
 
-```bash
-cd ai-service
-pip install -r requirements.txt
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-# Health check: http://localhost:8000/health
-```
-
-### 5. UI (React)
-
-```bash
-cd ui
-npm install
-npm start
-# App: http://localhost:3000
+# OR: everything via Docker
+docker compose up -d
 ```
 
 ---
 
-## 📡 API Reference
+## 📡 Complete API Reference
 
 ### Dependency Validation
-
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST   | `/api/validate` | Validate object change + dependency tree |
-| GET    | `/api/validate/dependencies/{name}` | Full dependency tree |
-| GET    | `/api/validate/parameters/{name}` | SP/Function parameters |
-| GET    | `/api/validate/exists/{name}` | Object existence check |
-
-**POST /api/validate**
-```json
-{
-  "objectName": "usp_GetCustomerOrders",
-  "objectType": "PROCEDURE",
-  "newDefinition": "CREATE PROCEDURE usp_GetCustomerOrders ..."
-}
-```
-**Response:**
-```json
-{
-  "status": "WARN",
-  "affectedObjects": [
-    {
-      "affectedName": "usp_CustomerReport",
-      "affectedType": "SQL_STORED_PROCEDURE",
-      "schemaName": "dbo",
-      "depth": 1,
-      "dependencyPath": "usp_CustomerReport"
-    }
-  ],
-  "message": "1 dependent object(s) will be affected.",
-  "warnings": []
-}
-```
-
----
+| POST | `/api/validate` | Validate change + recursive dependency tree |
+| GET | `/api/validate/dependencies/{name}` | Full dependency graph |
+| GET | `/api/validate/parameters/{name}` | SP/Function parameters |
+| GET | `/api/validate/exists/{name}` | Object existence check |
 
 ### Backup & Versioning
-
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST   | `/api/backup` | Backup current object definition |
-| GET    | `/api/versions/{name}` | Get last 3 versions |
-| GET    | `/api/versions/{name}/definition` | Get current live definition |
-| POST   | `/api/rollback` | Restore object to selected version |
+| POST | `/api/backup` | Backup current object (keeps last 3 versions) |
+| GET | `/api/versions/{name}` | Version history |
+| GET | `/api/versions/{name}/definition` | Current live definition |
+| POST | `/api/rollback` | Restore version (auto-backs up current first) |
 
-**POST /api/backup**
-```json
-{ "objectName": "usp_GetOrders", "objectType": "PROCEDURE" }
-```
-
-**POST /api/rollback**
-```json
-{ "objectName": "usp_GetOrders", "versionNumber": 2 }
-```
-
----
-
-### Preview Execution (Safe Mode)
-
+### Preview & Apply
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST   | `/api/preview` | Execute in BEGIN TRAN / ROLLBACK – zero persistence |
+| POST | `/api/preview` | Safe execute: BEGIN TRAN → ROLLBACK, no persistence |
+| POST | `/api/apply` | Live: validate → backup → execute → audit |
 
-**POST /api/preview**
-```json
-{
-  "sqlQuery": "UPDATE Orders SET Status='Shipped' WHERE OrderId=1",
-  "isStoredProc": false,
-  "timeoutSeconds": 30
-}
-```
-**Response:**
-```json
-{
-  "success": true,
-  "resultSet": [],
-  "columns": [],
-  "rowCount": 0,
-  "executionMs": 12.4,
-  "errors": [],
-  "messages": ["(1 row affected)"],
-  "mode": "SAFE_PREVIEW"
-}
-```
-
----
-
-### AI Service
-
+### Schema
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST   | `/generate` | NL → SQL/NoSQL |
-| GET    | `/models` | List available models |
-| POST   | `/explain` | Explain a query in plain English |
-| POST   | `/risk` | Risk analysis (data loss, perf, security) |
+| GET | `/api/schema/sqlserver?db=X` | Full SQL Server schema |
+| GET | `/api/schema/mongodb/{db}` | MongoDB schema via sampling |
+| GET | `/api/schema/table/{name}` | Single table detail |
+| GET | `/api/schema/ddl?db=X` | DDL string for AI context |
+
+### Change Summary / Diff
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/changesummary/compare` | LCS diff + AI summary |
+| GET | `/api/changesummary/{name}/{vA}/{vB}` | Compare stored versions |
+
+### Query Optimizer
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/optimizer/analyze` | Execution plan XML + heuristic tips |
+| GET | `/api/optimizer/missing-indexes` | DMV missing index hints |
+
+### MongoDB
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/mongo/query` | find / aggregate / count / distinct |
+| GET | `/api/mongo/databases` | List databases |
+| GET | `/api/mongo/databases/{db}/collections` | List collections |
+
+### Connection Manager
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/connections` | List profiles (passwords masked) |
+| POST | `/api/connections` | Save profile (AES-256 encrypted) |
+| POST | `/api/connections/{id}/test` | Test + measure latency |
+| POST | `/api/connections/test-string` | Test raw connection string |
+| DELETE | `/api/connections/{id}` | Soft-delete |
+
+### Scheduled Backups
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/schedules` | List schedules |
+| POST | `/api/schedules` | Add schedule |
+| PATCH | `/api/schedules/{id}/toggle?enabled=true` | Enable/disable |
+| DELETE | `/api/schedules/{id}` | Delete |
+
+### Preferences & Audit
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/preferences` | Load preferences |
+| PUT | `/api/preferences` | Save preferences |
+| GET | `/api/audit?objectName=X&top=100` | Audit log |
+| GET | `/api/healthdashboard` | System snapshot |
+| GET | `/health` | Health check |
+
+### AI Service (port 8000)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/generate` | NL → SQL/MongoDB (with auto-routing + fallback) |
+| GET | `/models` | Available Ollama models |
+| POST | `/explain` | Plain-English query explanation |
+| POST | `/risk` | Risk: data loss / performance / security |
+| POST | `/summarize-change` | AI diff summary |
+| POST | `/schema-context` | Answer questions using schema |
+| GET | `/health` | AI + Ollama status |
 
 ---
 
-## 🧪 Model Routing Logic
+## 🗄 Auto-Created Database Tables
 
-| Query Complexity | Model Selected |
-|-----------------|----------------|
-| MongoDB queries | Qwen3 480B (cloud) |
-| Stored procedures / CTEs | Qwen3 480B (cloud) |
-| Simple SELECT / JOINs | SQLCoder (local) |
-| Manual selection | User choice |
-
----
-
-## 🛡️ Safety Features
-
-- **Preview Mode**: Every execution wrapped in `BEGIN TRAN / ROLLBACK` – no data ever persists
-- **Destructive DDL Blocking**: `DROP DATABASE`, `TRUNCATE`, `DROP TABLE` blocked in preview
-- **Dependency Validation**: Recursive CTE walks the full dependency tree before any change
-- **Auto-Backup**: Current definition always backed up before rollback
-- **Version Pruning**: Max 3 versions stored per object (configurable)
-- **Syntax Check**: `SET PARSEONLY ON` validates new definitions before touching the database
+| Table | Purpose |
+|-------|---------|
+| `dbo.ObjectVersions` | Object version history (last 3) |
+| `dbo.KitsuneAuditLog` | Full audit trail |
+| `dbo.KitsuneConnections` | Encrypted connection profiles |
+| `dbo.KitsuneBackupSchedules` | Scheduled backup jobs |
+| `dbo.KitsuneUserPrefs` | User preferences JSON |
 
 ---
 
-## 🗃️ Database Setup
+## 🤖 AI Model Routing
 
-The `ObjectVersions` table is created **automatically on startup**. To create it manually:
-
-```sql
-CREATE TABLE dbo.ObjectVersions (
-    Id            INT IDENTITY(1,1) PRIMARY KEY,
-    ObjectName    NVARCHAR(256)  NOT NULL,
-    ObjectType    NVARCHAR(64)   NOT NULL,
-    VersionNumber INT            NOT NULL,
-    ScriptContent NVARCHAR(MAX)  NOT NULL,
-    CreatedAt     DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME(),
-    CONSTRAINT UQ_ObjectVersions UNIQUE (ObjectName, VersionNumber)
-);
-CREATE INDEX IX_OV_ObjectName ON dbo.ObjectVersions (ObjectName, VersionNumber DESC);
-```
+| Scenario | Model |
+|----------|-------|
+| Simple SELECT / JOINs | SQLCoder (local, fast) |
+| Stored procedures, CTEs, optimization | Qwen3 480B (cloud) |
+| MongoDB / NoSQL | Qwen3 480B |
+| Either model fails | Auto-fallback to the other |
+| Manual | User override via dropdown |
 
 ---
 
-## 📦 GitHub Setup
+## 📦 GitHub
 
 ```bash
-git init
-git add .
-git commit -m "feat: Initial KITSUNE setup – validation, backup, preview"
-git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/kitsune.git
+cd kitsune
+git remote add origin https://github.com/itsravinder/kitsune.git
 git push -u origin main
 ```
 
 ---
-
-## 🗺️ Roadmap (Phase 2+)
-
-- [ ] MongoDB schema extraction + NL → aggregation pipeline
-- [ ] AI Change Summary (diff between versions)
-- [ ] Full audit log with user attribution
-- [ ] Multi-database connection manager
-- [ ] Query optimizer suggestions
-- [ ] Scheduled backup jobs
-- [ ] Role-based access control
-
----
-
-## License
 
 MIT © KITSUNE Project

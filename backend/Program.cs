@@ -1,44 +1,39 @@
 // ============================================================
-// KITSUNE – Program.cs (.NET 8 / minimal hosting)
+// KITSUNE – Program.cs (Final – all services + middleware)
 // ============================================================
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Kitsune.Backend.Middleware;
 using Kitsune.Backend.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ── Logging ──────────────────────────────────────────────────
-builder.Logging
-    .ClearProviders()
-    .AddConsole()
-    .AddDebug();
+builder.Logging.ClearProviders().AddConsole().AddDebug();
 
-// ── Services ─────────────────────────────────────────────────
 builder.Services.AddControllers()
-    .AddJsonOptions(opts =>
-        opts.JsonSerializerOptions.PropertyNamingPolicy =
+    .AddJsonOptions(o =>
+        o.JsonSerializerOptions.PropertyNamingPolicy =
             System.Text.Json.JsonNamingPolicy.CamelCase);
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
-{
-    c.SwaggerDoc("v1", new() { Title = "KITSUNE API", Version = "v1" });
-});
+    c.SwaggerDoc("v1", new()
+    {
+        Title       = "KITSUNE API",
+        Version     = "v1",
+        Description = "AI Database Intelligence System – Complete API",
+    }));
 
-// CORS – allow the React dev server and any configured UI origin
 builder.Services.AddCors(opts =>
-    opts.AddPolicy("KitsuneCors", policy =>
-        policy.WithOrigins(
-                "http://localhost:3000",
-                "http://localhost:5173",
-                builder.Configuration["Cors:AllowedOrigin"] ?? "")
-              .AllowAnyHeader()
-              .AllowAnyMethod()));
+    opts.AddPolicy("KitsuneCors", p =>
+        p.WithOrigins(
+            "http://localhost:3000",
+            "http://localhost:5173",
+            builder.Configuration["Cors:AllowedOrigin"] ?? "")
+         .AllowAnyHeader().AllowAnyMethod()));
 
-// ── KITSUNE Domain Services ───────────────────────────────────
 builder.Services.AddScoped<IDependencyValidationService, DependencyValidationService>();
 builder.Services.AddScoped<IBackupVersioningService,     BackupVersioningService>();
 builder.Services.AddScoped<IPreviewExecutionService,     PreviewExecutionService>();
@@ -48,22 +43,30 @@ builder.Services.AddScoped<IApplyService,                ApplyService>();
 builder.Services.AddScoped<IChangeSummaryService,        ChangeSummaryService>();
 builder.Services.AddScoped<IConnectionManagerService,    ConnectionManagerService>();
 builder.Services.AddScoped<IQueryOptimizerService,       QueryOptimizerService>();
+builder.Services.AddScoped<IMongoQueryService,           MongoQueryService>();
+builder.Services.AddScoped<IScheduledBackupService,      ScheduledBackupService>();
+builder.Services.AddScoped<IUserPreferencesService,      UserPreferencesService>();
+builder.Services.AddScoped<ISqlScriptRunnerService,      SqlScriptRunnerService>();
+builder.Services.AddScoped<IDataExportService,           DataExportService>();
+builder.Services.AddScoped<INotificationService,         NotificationService>();
 builder.Services.AddHttpClient();
+builder.Services.AddHostedService<BackupSchedulerWorker>();
 
-// ── Health checks ─────────────────────────────────────────────
 builder.Services.AddHealthChecks()
     .AddSqlServer(
         builder.Configuration.GetConnectionString("SqlServer") ?? "",
-        name: "sql-server",
-        tags: new[] { "db" });
+        name: "sql-server", tags: new[] { "db" });
 
 var app = builder.Build();
 
-// ── Middleware pipeline ───────────────────────────────────────
+app.UseMiddleware<GlobalExceptionMiddleware>();
+app.UseMiddleware<RequestLoggingMiddleware>();
+
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
-    app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "KITSUNE v1"));
+    app.UseSwaggerUI(c =>
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "KITSUNE API v1"));
 }
 
 app.UseCors("KitsuneCors");
@@ -72,15 +75,23 @@ app.UseAuthorization();
 app.MapControllers();
 app.MapHealthChecks("/health");
 
-// ── Ensure ObjectVersions table exists on startup ────────────
 using (var scope = app.Services.CreateScope())
 {
-    var backupSvc = scope.ServiceProvider.GetRequiredService<IBackupVersioningService>();
-    var auditSvc  = scope.ServiceProvider.GetRequiredService<IAuditLogService>();
-    await backupSvc.EnsureVersionTableAsync();
-    await auditSvc.EnsureTableAsync();
-    var connMgr = scope.ServiceProvider.GetRequiredService<IConnectionManagerService>();
-    await connMgr.EnsureTableAsync();
+    var svc = scope.ServiceProvider;
+    var log = svc.GetRequiredService<ILogger<Program>>();
+    try
+    {
+        await svc.GetRequiredService<IBackupVersioningService>().EnsureVersionTableAsync();
+        await svc.GetRequiredService<IAuditLogService>().EnsureTableAsync();
+        await svc.GetRequiredService<IConnectionManagerService>().EnsureTableAsync();
+        await svc.GetRequiredService<IScheduledBackupService>().EnsureTableAsync();
+        await svc.GetRequiredService<IUserPreferencesService>().EnsureTableAsync();
+        log.LogInformation("KITSUNE database tables ready");
+    }
+    catch (Exception ex)
+    {
+        log.LogError(ex, "Failed to init database tables. Check SQL Server connection.");
+    }
 }
 
 app.Run();

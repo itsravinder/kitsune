@@ -6,14 +6,22 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Kitsune.Backend</RootNamespace>
     <AssemblyName>Kitsune.Backend</AssemblyName>
+    <Optimize>true</Optimize>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.OpenApi"              Version="8.0.0" />
-    <PackageReference Include="Swashbuckle.AspNetCore"                    Version="6.5.0" />
-    <PackageReference Include="Microsoft.Data.SqlClient"                  Version="5.2.0" />
-    <PackageReference Include="MongoDB.Driver"                            Version="2.25.0" />
-    <PackageReference Include="AspNetCore.HealthChecks.SqlServer"         Version="8.0.0" />
+    <!-- Web API + Swagger -->
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi"         Version="8.0.0" />
+    <PackageReference Include="Swashbuckle.AspNetCore"               Version="6.5.0" />
+
+    <!-- SQL Server -->
+    <PackageReference Include="Microsoft.Data.SqlClient"             Version="5.2.0" />
+
+    <!-- MongoDB -->
+    <PackageReference Include="MongoDB.Driver"                       Version="2.25.0" />
+
+    <!-- Health checks -->
+    <PackageReference Include="AspNetCore.HealthChecks.SqlServer"    Version="8.0.0" />
   </ItemGroup>
 
 </Project>
