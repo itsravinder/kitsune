@@ -1,109 +1,141 @@
 // ============================================================
-// KITSUNE – useKitsune custom hook
-// Central state + all action handlers for the app
+// KITSUNE – useKitsune hook v5
+// Dynamic model loading from backend /api/models (Ollama live)
+// All existing state + handlers preserved
 // ============================================================
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../services/api';
 
-const fmtMs = ms => (ms < 1000 ? `${ms.toFixed(0)}ms` : `${(ms / 1000).toFixed(2)}s`);
+const BACKEND = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5000';
+const fmtMs   = ms => (ms < 1000 ? `${ms.toFixed(0)}ms` : `${(ms / 1000).toFixed(2)}s`);
 
 export function useKitsune() {
-  // ── Core inputs ────────────────────────────────────────────
-  const [nlQuery,     setNlQuery]     = useState('Show all customers who placed orders in the last 30 days with their total spend');
-  const [sqlQuery,    setSqlQuery]    = useState('');
-  const [objectName,  setObjectName]  = useState('');
-  const [objectType,  setObjectType]  = useState('PROCEDURE');
-  const [dbType,      setDbType]      = useState('SqlServer');
-  const [model,       setModel]       = useState('auto');
-  const [activeTab,   setActiveTab]   = useState('results');
+  // ── Core inputs ───────────────────────────────────────────
+  const [nlQuery,      setNlQuery]      = useState('Show all customers who placed orders in the last 30 days with their total spend');
+  const [sqlQuery,     setSqlQuery]     = useState('');
+  const [objectName,   setObjectName]   = useState('');
+  const [objectType,   setObjectType]   = useState('PROCEDURE');
+  const [dbType,       setDbType]       = useState('SqlServer');
+  const [model,        setModel]        = useState('auto');
+  const [activeTab,    setActiveTab]    = useState('results');
 
-  // ── Data ───────────────────────────────────────────────────
-  const [models,         setModels]         = useState([]);
-  const [validation,     setValidation]     = useState(null);
-  const [preview,        setPreview]        = useState(null);
-  const [applyResult,    setApplyResult]    = useState(null);
-  const [versions,       setVersions]       = useState([]);
-  const [backupResult,   setBackupResult]   = useState(null);
-  const [rollbackResult, setRollbackResult] = useState(null);
-  const [riskResult,     setRiskResult]     = useState(null);
-  const [explanation,    setExplanation]    = useState('');
-  const [genMeta,        setGenMeta]        = useState('');
-  const [diffResult,     setDiffResult]     = useState(null);
-  const [diffVA,         setDiffVA]         = useState(0);
-  const [diffVB,         setDiffVB]         = useState(0);
-  const [schema,         setSchema]         = useState(null);
-  const [connections,    setConnections]    = useState([]);
-  const [connTestResult, setConnTestResult] = useState(null);
-  const [auditLogs,      setAuditLogs]      = useState([]);
-  const [schedules,      setSchedules]      = useState([]);
-  const [preferences,    setPreferences]    = useState(null);
-  const [missingIndexes, setMissingIndexes] = useState([]);
-  const [optimizerResult,setOptimizerResult]= useState(null);
-  const [mongoResult,    setMongoResult]    = useState(null);
-  const [mongoDb,        setMongoDb]        = useState('');
-  const [mongoCollection,setMongoCollection]= useState('');
-  const [mongoQuery,     setMongoQuery]     = useState('{}');
-  const [mongoQueryType, setMongoQueryType] = useState('find');
+  // ── Data ─────────────────────────────────────────────────
+  const [models,          setModels]          = useState([]);
+  const [modelsLoading,   setModelsLoading]   = useState(false);
+  const [validation,      setValidation]      = useState(null);
+  const [preview,         setPreview]         = useState(null);
+  const [applyResult,     setApplyResult]     = useState(null);
+  const [versions,        setVersions]        = useState([]);
+  const [backupResult,    setBackupResult]    = useState(null);
+  const [rollbackResult,  setRollbackResult]  = useState(null);
+  const [riskResult,      setRiskResult]      = useState(null);
+  const [explanation,     setExplanation]     = useState('');
+  const [genMeta,         setGenMeta]         = useState('');
+  const [diffResult,      setDiffResult]      = useState(null);
+  const [diffVA,          setDiffVA]          = useState(0);
+  const [diffVB,          setDiffVB]          = useState(0);
+  const [schema,          setSchema]          = useState(null);
+  const [connections,     setConnections]     = useState([]);
+  const [connTestResult,  setConnTestResult]  = useState(null);
+  const [auditLogs,       setAuditLogs]       = useState([]);
+  const [schedules,       setSchedules]       = useState([]);
+  const [preferences,     setPreferences]     = useState(null);
+  const [missingIndexes,  setMissingIndexes]  = useState([]);
+  const [optimizerResult, setOptimizerResult] = useState(null);
+  const [mongoResult,     setMongoResult]     = useState(null);
+  const [mongoDb,         setMongoDb]         = useState('');
+  const [mongoCollection, setMongoCollection] = useState('');
+  const [mongoQuery,      setMongoQuery]      = useState('{}');
+  const [mongoQueryType,  setMongoQueryType]  = useState('find');
 
-  // ── Connection form ────────────────────────────────────────
+  // ── Connection form ───────────────────────────────────────
   const [connForm, setConnForm] = useState({
     name: '', databaseType: 'SqlServer', host: 'localhost',
     port: 1433, databaseName: '', username: 'sa', password: '', trustCert: true,
+    connectionStringOverride: '',
   });
 
-  // ── Notifications ──────────────────────────────────────────
+  // ── Notifications ─────────────────────────────────────────
   const [notifications, setNotifications] = useState([]);
 
   const notify = useCallback((msg, type = 'info') => {
     const id = Date.now();
-    setNotifications(p => [...p, { id, msg, type }]);
+    setNotifications(p => [...p.slice(-4), { id, msg, type }]);
     setTimeout(() => setNotifications(p => p.filter(n => n.id !== id)), 4000);
   }, []);
 
-  // ── Loading map ────────────────────────────────────────────
+  // ── Loading map ───────────────────────────────────────────
   const [loading, setLoading] = useState({});
-  const setLoad  = useCallback((k, v) => setLoading(p => ({ ...p, [k]: v })), []);
+  const setLoad   = useCallback((k, v) => setLoading(p => ({ ...p, [k]: v })), []);
 
-  // ── Load models on mount ───────────────────────────────────
-  useEffect(() => {
-    api.listModels()
-      .then(data => setModels([
+  // ── Load models DYNAMICALLY from backend ──────────────────
+  // Backend fetches from Ollama /api/tags – never hardcoded
+  const loadModels = useCallback(async () => {
+    setModelsLoading(true);
+    try {
+      // Try backend /api/models first (fetches from Ollama dynamically)
+      const res = await fetch(`${BACKEND}/api/models`);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          // Ensure Auto-Route is always first
+          const hasAuto = data.some(m => m.id === 'auto');
+          const models  = hasAuto ? data : [
+            { id: 'auto', name: 'auto', displayName: 'Auto-Route', type: 'system', available: true },
+            ...data,
+          ];
+          setModels(models.map(m => ({
+            ...m,
+            display_name: m.displayName || m.display_name || m.name,
+          })));
+          return;
+        }
+      }
+    } catch { /* fall through to AI service */ }
+
+    // Fallback: try AI service /models endpoint
+    try {
+      const data = await api.listModels();
+      setModels([
         { id: 'auto', display_name: '⚡ Auto-Route', type: 'system', available: true },
-        ...data,
-      ]))
-      .catch(() => setModels([
-        { id: 'auto',        display_name: '⚡ Auto-Route',       type: 'system', available: true },
-        { id: 'sqlcoder',    display_name: 'SQLCoder (Local)',    type: 'local',  available: true },
-        { id: 'qwen3-coder', display_name: 'Qwen3 480B (Cloud)', type: 'cloud',  available: true },
-      ]));
+        ...data.map(m => ({ ...m, display_name: m.display_name || m.name })),
+      ]);
+    } catch {
+      // Final fallback: static list
+      setModels([
+        { id: 'auto',        display_name: '⚡ Auto-Route',         type: 'system', available: true },
+        { id: 'sqlcoder',    display_name: 'SQLCoder (Local)',      type: 'local',  available: false },
+        { id: 'qwen3-coder', display_name: 'Qwen3 480B (Cloud)',   type: 'cloud',  available: false },
+      ]);
+    } finally {
+      setModelsLoading(false);
+    }
   }, []);
 
-  // ── Load preferences on mount ──────────────────────────────
+  useEffect(() => { loadModels(); }, [loadModels]);
+
+  // ── Load preferences ──────────────────────────────────────
   useEffect(() => {
-    api.previewQuery && // guard: only if api available
-    fetch('http://localhost:5000/api/preferences')
-      .then(r => r.json())
-      .then(p => { setPreferences(p); if (p.defaultModel) setModel(p.defaultModel); })
+    fetch(`${BACKEND}/api/preferences`)
+      .then(r => r.ok ? r.json() : null)
+      .then(p => { if (p) { setPreferences(p); if (p.defaultModel) setModel(p.defaultModel); } })
       .catch(() => {});
   }, []);
 
-  // ── Generic async handler factory ─────────────────────────
+  // ── Generic handler factory ───────────────────────────────
   const handle = useCallback((key, fn) => async (...args) => {
     setLoad(key, true);
     try { await fn(...args); }
-    catch (e) {
-      notify(`${key}: ${e.message}`, 'error');
-      console.error(key, e);
-    }
+    catch (e) { notify(`${key}: ${e.message}`, 'error'); console.error(key, e); }
     finally { setLoad(key, false); }
   }, [setLoad, notify]);
 
-  // ── Actions ────────────────────────────────────────────────
+  // ── All action handlers ───────────────────────────────────
   const handleGenerate = handle('gen', async () => {
     setGenMeta('');
     const res = await api.generateQuery({ natural_language: nlQuery, database_type: dbType, model });
     setSqlQuery(res.generated_query || '');
-    setGenMeta(`${res.display_name} · ${(res.confidence_score * 100).toFixed(0)}% confidence · ${fmtMs(res.execution_ms)} · ${res.tokens_used} tokens${res.fallback_used ? ' · fallback' : ''}`);
+    setGenMeta(`${res.display_name} · ${(res.confidence_score * 100).toFixed(0)}% · ${fmtMs(res.execution_ms)} · ${res.tokens_used} tokens${res.fallback_used ? ' · fallback' : ''}`);
     notify('Query generated', 'success');
   });
 
@@ -149,7 +181,7 @@ export function useKitsune() {
     const res = await api.applyChange({ objectName, objectType, sqlScript: sqlQuery, skipValidation: false, skipBackup: false });
     setApplyResult(res);
     setActiveTab('results');
-    notify(res.success ? 'Change applied successfully' : `Apply failed: ${res.status}`, res.success ? 'success' : 'error');
+    notify(res.success ? 'Change applied' : `Apply failed: ${res.status}`, res.success ? 'success' : 'error');
   });
 
   const handleRisk = handle('risk', async () => {
@@ -173,7 +205,7 @@ export function useKitsune() {
   });
 
   const handleDiff = handle('diff', async () => {
-    if (versions.length < 2) { notify('Need at least 2 versions to diff', 'error'); return; }
+    if (versions.length < 2) { notify('Need at least 2 versions', 'error'); return; }
     const va = versions.find(v => v.versionNumber === diffVA);
     const vb = versions.find(v => v.versionNumber === diffVB);
     if (!va || !vb) { notify('Select valid versions', 'error'); return; }
@@ -208,15 +240,15 @@ export function useKitsune() {
   });
 
   const handleLoadSchedules = handle('schedules', async () => {
-    const res = await fetch('http://localhost:5000/api/schedules').then(r => r.json());
+    const res = await fetch(`${BACKEND}/api/schedules`).then(r => r.json());
     setSchedules(Array.isArray(res) ? res : []);
     setActiveTab('schedules');
   });
 
   const handleAddSchedule = handle('addSched', async (intervalMinutes) => {
-    await fetch('http://localhost:5000/api/schedules', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    if (!objectName) { notify('Set an object name first', 'error'); return; }
+    await fetch(`${BACKEND}/api/schedules`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ objectName, objectType, intervalMinutes }),
     });
     notify(`Schedule added for ${objectName}`, 'success');
@@ -231,9 +263,8 @@ export function useKitsune() {
   });
 
   const handleMongoQuery = handle('mongo', async () => {
-    const res = await fetch('http://localhost:5000/api/mongo/query', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    const res = await fetch(`${BACKEND}/api/mongo/query`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ databaseName: mongoDb, collectionName: mongoCollection, queryJson: mongoQuery, queryType: mongoQueryType, limit: 200, safeMode: true }),
     }).then(r => r.json());
     setMongoResult(res);
@@ -242,9 +273,8 @@ export function useKitsune() {
   });
 
   const handleSavePreferences = handle('savePrefs', async (prefs) => {
-    await fetch('http://localhost:5000/api/preferences', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+    await fetch(`${BACKEND}/api/preferences`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(prefs),
     });
     setPreferences(prefs);
@@ -257,8 +287,10 @@ export function useKitsune() {
     objectName, setObjectName, objectType, setObjectType,
     dbType, setDbType, model, setModel,
     activeTab, setActiveTab,
+    // Models (dynamic)
+    models, modelsLoading, loadModels,
     // Data
-    models, validation, preview, applyResult,
+    validation, preview, applyResult,
     versions, backupResult, rollbackResult,
     riskResult, explanation, genMeta,
     diffResult, diffVA, setDiffVA, diffVB, setDiffVB,
@@ -267,7 +299,7 @@ export function useKitsune() {
     missingIndexes, optimizerResult, mongoResult,
     mongoDb, setMongoDb, mongoCollection, setMongoCollection,
     mongoQuery, setMongoQuery, mongoQueryType, setMongoQueryType,
-    notifications,
+    notifications, notify,
     // Loading
     loading,
     // Handlers

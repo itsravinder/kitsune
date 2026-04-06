@@ -1,5 +1,5 @@
 // ============================================================
-// KITSUNE – Program.cs (Final – all services + middleware)
+// KITSUNE – Program.cs (v5 – all services + model loader)
 // ============================================================
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
@@ -9,7 +9,6 @@ using Kitsune.Backend.Middleware;
 using Kitsune.Backend.Services;
 
 var builder = WebApplication.CreateBuilder(args);
-
 builder.Logging.ClearProviders().AddConsole().AddDebug();
 
 builder.Services.AddControllers()
@@ -19,21 +18,17 @@ builder.Services.AddControllers()
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
-    c.SwaggerDoc("v1", new()
-    {
-        Title       = "KITSUNE API",
-        Version     = "v1",
-        Description = "AI Database Intelligence System – Complete API",
-    }));
+    c.SwaggerDoc("v1", new() { Title="KITSUNE API", Version="v1",
+        Description="AI Database Intelligence System – v5" }));
 
 builder.Services.AddCors(opts =>
     opts.AddPolicy("KitsuneCors", p =>
         p.WithOrigins(
-            "http://localhost:3000",
-            "http://localhost:5173",
+            "http://localhost:3000", "http://localhost:5173",
             builder.Configuration["Cors:AllowedOrigin"] ?? "")
          .AllowAnyHeader().AllowAnyMethod()));
 
+// ── All Domain Services ───────────────────────────────────────
 builder.Services.AddScoped<IDependencyValidationService, DependencyValidationService>();
 builder.Services.AddScoped<IBackupVersioningService,     BackupVersioningService>();
 builder.Services.AddScoped<IPreviewExecutionService,     PreviewExecutionService>();
@@ -49,12 +44,12 @@ builder.Services.AddScoped<IUserPreferencesService,      UserPreferencesService>
 builder.Services.AddScoped<ISqlScriptRunnerService,      SqlScriptRunnerService>();
 builder.Services.AddScoped<IDataExportService,           DataExportService>();
 builder.Services.AddScoped<INotificationService,         NotificationService>();
+builder.Services.AddScoped<IModelService,                ModelService>(); // NEW: dynamic models
+
 builder.Services.AddHttpClient();
 builder.Services.AddHostedService<BackupSchedulerWorker>();
-
 builder.Services.AddHealthChecks()
-    .AddSqlServer(
-        builder.Configuration.GetConnectionString("SqlServer") ?? "",
+    .AddSqlServer(builder.Configuration.GetConnectionString("SqlServer") ?? "",
         name: "sql-server", tags: new[] { "db" });
 
 var app = builder.Build();
@@ -66,7 +61,7 @@ if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI(c =>
-        c.SwaggerEndpoint("/swagger/v1/swagger.json", "KITSUNE API v1"));
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "KITSUNE API v5"));
 }
 
 app.UseCors("KitsuneCors");
@@ -75,6 +70,7 @@ app.UseAuthorization();
 app.MapControllers();
 app.MapHealthChecks("/health");
 
+// ── Bootstrap all tables ──────────────────────────────────────
 using (var scope = app.Services.CreateScope())
 {
     var svc = scope.ServiceProvider;
@@ -86,11 +82,11 @@ using (var scope = app.Services.CreateScope())
         await svc.GetRequiredService<IConnectionManagerService>().EnsureTableAsync();
         await svc.GetRequiredService<IScheduledBackupService>().EnsureTableAsync();
         await svc.GetRequiredService<IUserPreferencesService>().EnsureTableAsync();
-        log.LogInformation("KITSUNE database tables ready");
+        log.LogInformation("KITSUNE v5 database tables ready");
     }
     catch (Exception ex)
     {
-        log.LogError(ex, "Failed to init database tables. Check SQL Server connection.");
+        log.LogError(ex, "Failed to initialize tables. Check SQL Server connection.");
     }
 }
 
