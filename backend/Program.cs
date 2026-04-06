@@ -45,6 +45,7 @@ builder.Services.AddScoped<ISqlScriptRunnerService,      SqlScriptRunnerService>
 builder.Services.AddScoped<IDataExportService,           DataExportService>();
 builder.Services.AddScoped<INotificationService,         NotificationService>();
 builder.Services.AddScoped<IModelService,                ModelService>(); // NEW: dynamic models
+builder.Services.AddScoped<IQueryIntentService,          QueryIntentService>(); // v6: intent detection
 
 builder.Services.AddHttpClient();
 builder.Services.AddHostedService<BackupSchedulerWorker>();
