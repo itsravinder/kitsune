@@ -95,50 +95,6 @@ namespace Kitsune.Backend.Controllers
         public string Model      { get; set; } = "auto";
     }
 
-    // ── Connection Manager Controller ─────────────────────────
-    [ApiController]
-    [Route("api/connections")]
-    public class ConnectionsController : ControllerBase
-    {
-        private readonly IConnectionManagerService _connMgr;
-
-        public ConnectionsController(IConnectionManagerService connMgr) => _connMgr = connMgr;
-
-        /// <summary>GET /api/connections – list all profiles</summary>
-        [HttpGet]
-        public async Task<IActionResult> List() =>
-            Ok(await _connMgr.ListProfilesAsync());
-
-        /// <summary>POST /api/connections – save new profile</summary>
-        [HttpPost]
-        public async Task<IActionResult> Save([FromBody] SaveProfileRequest req)
-        {
-            var id = await _connMgr.SaveProfileAsync(req);
-            return Ok(new { id, message = $"Profile '{req.Name}' saved." });
-        }
-
-        /// <summary>POST /api/connections/{id}/test – test connectivity</summary>
-        [HttpPost("{id:int}/test")]
-        public async Task<IActionResult> Test(int id) =>
-            Ok(await _connMgr.TestProfileAsync(id));
-
-        /// <summary>POST /api/connections/test-string – test raw connection string</summary>
-        [HttpPost("test-string")]
-        public async Task<IActionResult> TestString([FromBody] TestStringRequest req) =>
-            Ok(await _connMgr.TestConnectionStringAsync(req.ConnectionString, req.DatabaseType));
-
-        /// <summary>DELETE /api/connections/{id}</summary>
-        [HttpDelete("{id:int}")]
-        public async Task<IActionResult> Delete(int id)
-        {
-            var ok = await _connMgr.DeleteProfileAsync(id);
-            return ok ? Ok(new { message = "Profile deleted." }) : NotFound();
-        }
-    }
-
-    public class TestStringRequest
-    {
-        public string ConnectionString { get; set; } = "";
-        public string DatabaseType     { get; set; } = "SqlServer";
-    }
+    // NOTE: ConnectionsController and TestStringRequest live in EnhancementControllers.cs
+    //       (full version with /test-raw, /tree, /definition endpoints)
 }
