@@ -10,9 +10,10 @@ using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
+using Kitsune.Backend.Models;
+
 namespace Kitsune.Backend.Services
 {
-    public class QueryPlanResult
     {
         public string  Query          { get; set; } = "";
         public string  PlanXml        { get; set; } = "";
@@ -24,7 +25,6 @@ namespace Kitsune.Backend.Services
         public string  OverallRisk    { get; set; } = "LOW";
     }
 
-    public class MissingIndexHint
     {
         public string TableName         { get; set; } = "";
         public string EqualityColumns   { get; set; } = "";
@@ -34,7 +34,6 @@ namespace Kitsune.Backend.Services
         public string CreateStatement   { get; set; } = "";
     }
 
-    public class OptimizeRequest
     {
         public string SqlQuery     { get; set; } = "";
         public bool   GetPlan      { get; set; } = true;

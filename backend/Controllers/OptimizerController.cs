@@ -4,6 +4,7 @@
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using Kitsune.Backend.Services;
+using Kitsune.Backend.Models;
 
 namespace Kitsune.Backend.Controllers
 {

@@ -13,9 +13,10 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using MongoDB.Driver;
 
+using Kitsune.Backend.Models;
+
 namespace Kitsune.Backend.Services
 {
-    public class ConnectionProfile
     {
         public int       Id             { get; set; }
         public string    Name           { get; set; } = "";
@@ -34,7 +35,6 @@ namespace Kitsune.Backend.Services
         public string    ConnectionStringOverride { get; set; } = "";
     }
 
-    public class ConnectionTestResult
     {
         public bool   Success       { get; set; }
         public string Message       { get; set; } = "";
@@ -43,7 +43,6 @@ namespace Kitsune.Backend.Services
         public string DatabaseType  { get; set; } = "";
     }
 
-    public class SaveProfileRequest
     {
         public string Name           { get; set; } = "";
         public string DatabaseType   { get; set; } = "SqlServer";

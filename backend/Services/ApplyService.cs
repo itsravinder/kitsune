@@ -15,7 +15,6 @@ using Kitsune.Backend.Models;
 
 namespace Kitsune.Backend.Services
 {
-    public class ApplyRequest
     {
         public string ObjectName      { get; set; } = "";
         public string ObjectType      { get; set; } = "";
@@ -25,7 +24,6 @@ namespace Kitsune.Backend.Services
         public string ChangeSummary   { get; set; } = "";
     }
 
-    public class ApplyResponse
     {
         public bool         Success          { get; set; }
         public string       Status           { get; set; } = "";

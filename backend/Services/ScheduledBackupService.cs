@@ -13,10 +13,11 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
+using Kitsune.Backend.Models;
+
 namespace Kitsune.Backend.Services
 {
     // ── Schedule entry ────────────────────────────────────────
-    public class BackupSchedule
     {
         public int      Id              { get; set; }
         public string   ObjectName      { get; set; } = "";
@@ -28,7 +29,6 @@ namespace Kitsune.Backend.Services
         public DateTime CreatedAt       { get; set; }
     }
 
-    public class ScheduleRequest
     {
         public string ObjectName      { get; set; } = "";
         public string ObjectType      { get; set; } = "PROCEDURE";

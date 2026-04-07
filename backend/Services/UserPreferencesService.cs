@@ -10,9 +10,10 @@ using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
+using Kitsune.Backend.Models;
+
 namespace Kitsune.Backend.Services
 {
-    public class UserPreferences
     {
         public string Theme              { get; set; } = "dark";
         public string DefaultModel       { get; set; } = "auto";

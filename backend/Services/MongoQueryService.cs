@@ -13,9 +13,10 @@ using MongoDB.Bson;
 using MongoDB.Bson.IO;
 using MongoDB.Driver;
 
+using Kitsune.Backend.Models;
+
 namespace Kitsune.Backend.Services
 {
-    public class MongoQueryRequest
     {
         public string DatabaseName   { get; set; } = "";
         public string CollectionName { get; set; } = "";
@@ -26,7 +27,6 @@ namespace Kitsune.Backend.Services
         public bool   SafeMode       { get; set; } = true;   // read-only enforcement
     }
 
-    public class MongoQueryResponse
     {
         public bool              Success      { get; set; }
         public string            Mode         { get; set; } = "SAFE_READ";

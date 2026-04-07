@@ -11,6 +11,8 @@ using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
+using Kitsune.Backend.Models;
+
 namespace Kitsune.Backend.Services
 {
     public enum AuditAction
@@ -18,7 +20,6 @@ namespace Kitsune.Backend.Services
         Generate, Validate, Preview, Backup, Rollback, Apply, SchemaExtract, RiskAnalysis
     }
 
-    public class AuditEntry
     {
         public long      Id          { get; set; }
         public string    Action      { get; set; } = "";

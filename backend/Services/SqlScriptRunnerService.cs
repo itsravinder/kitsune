@@ -12,9 +12,10 @@ using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
+using Kitsune.Backend.Models;
+
 namespace Kitsune.Backend.Services
 {
-    public class ScriptRunRequest
     {
         public string SqlScript      { get; set; } = "";
         public bool   DryRun         { get; set; } = false;   // PARSEONLY – syntax check only
@@ -23,7 +24,6 @@ namespace Kitsune.Backend.Services
         public string? DatabaseName  { get; set; }
     }
 
-    public class BatchResult
     {
         public int     BatchNumber  { get; set; }
         public string  BatchSql     { get; set; } = "";
@@ -33,7 +33,6 @@ namespace Kitsune.Backend.Services
         public string? Error        { get; set; }
     }
 
-    public class ScriptRunResult
     {
         public bool              Success        { get; set; }
         public int               TotalBatches   { get; set; }

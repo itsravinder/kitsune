@@ -13,16 +13,16 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
+using Kitsune.Backend.Models;
+
 namespace Kitsune.Backend.Services
 {
-    public class DiffLine
     {
         public string Type    { get; set; } = ""; // added | removed | unchanged
         public int    LineNum { get; set; }
         public string Content { get; set; } = "";
     }
 
-    public class ChangeSummaryResult
     {
         public string          ObjectName   { get; set; } = "";
         public int             OldVersion   { get; set; }

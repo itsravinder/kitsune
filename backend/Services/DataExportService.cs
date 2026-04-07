@@ -13,9 +13,10 @@ using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
+using Kitsune.Backend.Models;
+
 namespace Kitsune.Backend.Services
 {
-    public class ExportRequest
     {
         public string SqlQuery     { get; set; } = "";
         public string Format       { get; set; } = "csv";  // csv | json | tsv
@@ -24,7 +25,6 @@ namespace Kitsune.Backend.Services
         public string FileName     { get; set; } = "kitsune-export";
     }
 
-    public class ExportResult
     {
         public bool   Success      { get; set; }
         public string ContentType  { get; set; } = "text/csv";

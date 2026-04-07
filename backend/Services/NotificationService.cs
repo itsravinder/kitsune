@@ -11,6 +11,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Kitsune.Backend.Models;
 
 namespace Kitsune.Backend.Services
 {

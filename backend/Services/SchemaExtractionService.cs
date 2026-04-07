@@ -18,7 +18,6 @@ namespace Kitsune.Backend.Services
 {
     // ── Schema Models ─────────────────────────────────────────
 
-    public class DatabaseSchema
     {
         public string                  DatabaseName { get; set; } = "";
         public string                  DatabaseType { get; set; } = "";
@@ -31,7 +30,6 @@ namespace Kitsune.Backend.Services
         public string                  DDLSummary   { get; set; } = "";
     }
 
-    public class TableSchema
     {
         public string            Schema       { get; set; } = "dbo";
         public string            Name         { get; set; } = "";
@@ -41,7 +39,6 @@ namespace Kitsune.Backend.Services
         public long              RowCount     { get; set; }
     }
 
-    public class ColumnSchema
     {
         public string Name          { get; set; } = "";
         public string DataType      { get; set; } = "";
@@ -54,7 +51,6 @@ namespace Kitsune.Backend.Services
         public int?   Scale         { get; set; }
     }
 
-    public class IndexSchema
     {
         public string       Name      { get; set; } = "";
         public bool         IsUnique  { get; set; }
@@ -62,7 +58,6 @@ namespace Kitsune.Backend.Services
         public List<string> Columns   { get; set; } = new();
     }
 
-    public class FKSchema
     {
         public string ConstraintName   { get; set; } = "";
         public string ForeignKeyColumn { get; set; } = "";
@@ -70,14 +65,12 @@ namespace Kitsune.Backend.Services
         public string ReferencedColumn { get; set; } = "";
     }
 
-    public class ViewSchema
     {
         public string Schema     { get; set; } = "dbo";
         public string Name       { get; set; } = "";
         public string Definition { get; set; } = "";
     }
 
-    public class ProcedureSchema
     {
         public string             Schema     { get; set; } = "dbo";
         public string             Name       { get; set; } = "";
@@ -86,7 +79,6 @@ namespace Kitsune.Backend.Services
         public DateTime           ModifiedAt { get; set; }
     }
 
-    public class FunctionSchema
     {
         public string             Schema      { get; set; } = "dbo";
         public string             Name        { get; set; } = "";
@@ -95,7 +87,6 @@ namespace Kitsune.Backend.Services
         public List<ParameterInfo> Parameters { get; set; } = new();
     }
 
-    public class CollectionSchema
     {
         public string                     Name        { get; set; } = "";
         public long                       DocumentCount { get; set; }
@@ -103,7 +94,6 @@ namespace Kitsune.Backend.Services
         public List<MongoIndexSchema>     Indexes     { get; set; } = new();
     }
 
-    public class MongoFieldSchema
     {
         public string Name         { get; set; } = "";
         public string InferredType { get; set; } = "";
@@ -111,7 +101,6 @@ namespace Kitsune.Backend.Services
         public bool   IsNested     { get; set; }
     }
 
-    public class MongoIndexSchema
     {
         public string Name   { get; set; } = "";
         public bool   Unique { get; set; }
