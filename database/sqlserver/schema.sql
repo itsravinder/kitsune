@@ -665,9 +665,9 @@ BEGIN
                 UPDATE dbo.Coupons SET UsedCount = UsedCount + 1 WHERE CouponId = @CouponId;
         END
 
-        -- Generate order number
-        DECLARE @OrderNumber NVARCHAR(30) = 'ORD-' + FORMAT(SYSUTCDATETIME(), 'yyyyMMdd') + '-' + RIGHT('00000' + CAST(NEXT VALUE FOR CASE WHEN OBJECT_ID('dbo.OrderSeq') IS NOT NULL THEN (SELECT 1) ELSE 1 END AS NVARCHAR), 5);
-        SET @OrderNumber = 'ORD-' + FORMAT(SYSUTCDATETIME(), 'yyyyMMddHHmmss') + '-' + CAST(@CustomerId AS NVARCHAR);
+        -- Generate unique order number using timestamp + customer id
+        DECLARE @OrderNumber NVARCHAR(30);
+        SET @OrderNumber = 'ORD-' + FORMAT(SYSUTCDATETIME(), 'yyyyMMddHHmmss') + '-' + CAST(@CustomerId AS NVARCHAR(10));
 
         INSERT INTO dbo.Orders
             (OrderNumber, CustomerId, AddressId, CouponId, OrderStatus,
@@ -842,7 +842,7 @@ BEGIN
       AND (@BrandId    IS NULL OR p.BrandId    = @BrandId)
       AND (@MinPrice   IS NULL OR p.SellingPrice >= @MinPrice)
       AND (@MaxPrice   IS NULL OR p.SellingPrice <= @MaxPrice)
-      AND (@InStock    IS NULL OR (p.StockQty > 0) = @InStock)
+      AND (@InStock    IS NULL OR (CASE WHEN p.StockQty > 0 THEN 1 ELSE 0 END) = @InStock)
       AND (@MinRating  IS NULL OR p.Rating >= @MinRating)
       AND (@Keyword    IS NULL OR p.ProductName LIKE '%' + @Keyword + '%'
                                OR p.SKU LIKE '%' + @Keyword + '%')
@@ -851,8 +851,10 @@ BEGIN
         CASE WHEN @SortBy = 'PriceHigh' THEN p.SellingPrice  END DESC,
         CASE WHEN @SortBy = 'Rating'    THEN p.Rating        END DESC,
         CASE WHEN @SortBy = 'Newest'    THEN p.CreatedAt     END DESC,
-        p.IsFeatured DESC, p.ReviewCount DESC
-    OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+        p.IsFeatured DESC,
+        p.ReviewCount DESC
+    OFFSET @Offset ROWS
+    FETCH NEXT @PageSize ROWS ONLY;
 END;
 GO
 PRINT '  ✓ usp_SearchProducts';
