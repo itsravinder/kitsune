@@ -22,8 +22,8 @@ namespace Kitsune.Backend.Controllers
         [HttpPost("query")]
         public async Task<IActionResult> Query([FromBody] MongoQueryRequest req)
         {
-            if (string.IsNullOrWhiteSpace(req.DatabaseName) || string.IsNullOrWhiteSpace(req.CollectionName))
-                return BadRequest(new { error = "DatabaseName and CollectionName are required." });
+            if (string.IsNullOrWhiteSpace(req.Database) || string.IsNullOrWhiteSpace(req.Collection))
+                return BadRequest(new { error = "Database and Collection are required." });
             var result = await _mongo.ExecuteAsync(req);
             return Ok(result);
         }
@@ -57,7 +57,7 @@ namespace Kitsune.Backend.Controllers
         public async Task<IActionResult> Add([FromBody] ScheduleRequest req)
         {
             var id = await _sched.AddScheduleAsync(req);
-            return Ok(new { id, message = $"Schedule created for '{req.ObjectName}' every {req.IntervalMinutes}min." });
+            return Ok(new { id, message = $"Schedule created for '{req.ObjectName}' every {req.FrequencyMinutes}min." });
         }
 
         /// <summary>PATCH /api/schedules/{id}/toggle – enable or disable</summary>
