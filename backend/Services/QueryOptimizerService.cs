@@ -129,7 +129,7 @@ ON [{hint.SchemaName}].[{hint.TableName}] ({colList}){inclStr};";
         private static double ExtractCostFromPlan(string planXml)
         {
             if (string.IsNullOrEmpty(planXml)) return 0;
-            var m = Regex.Match(planXml, @"StatementSubTreeCost=""([\d\.]+)""");
+            var m = Regex.Match(planXml, "StatementSubTreeCost=\"([\\d\\.]+)\"");
             return m.Success ? double.Parse(m.Groups[1].Value) : 0;
         }
 

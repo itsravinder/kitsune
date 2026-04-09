@@ -1,0 +1,145 @@
+name: KITSUNE CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Backend Build & Test ──────────────────────────────────────
+  backend:
+    name: .NET Backend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore packages
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore --configuration Release
+
+      - name: Run tests (if any)
+        run: dotnet test --no-build --configuration Release --verbosity normal
+        continue-on-error: true
+
+      - name: Publish artifact
+        if: github.ref == 'refs/heads/main'
+        run: dotnet publish -c Release -o ../artifacts/backend
+
+      - name: Upload backend artifact
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: kitsune-backend
+          path: artifacts/backend
+
+  # ── AI Service Lint ────────────────────────────────────────────
+  ai-service:
+    name: Python AI Service
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ai-service
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Lint with ruff (if available)
+        run: pip install ruff && ruff check main.py || true
+
+      - name: Syntax check
+        run: python -m py_compile main.py && echo "✓ Syntax OK"
+
+  # ── UI Build ───────────────────────────────────────────────────
+  ui:
+    name: React UI
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install packages
+        run: npm ci --prefer-offline || npm install
+
+      - name: Build production bundle
+        run: npm run build
+        env:
+          REACT_APP_BACKEND_URL: http://localhost:5000
+          REACT_APP_AI_URL: http://localhost:8000
+
+      - name: Upload UI artifact
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: kitsune-ui
+          path: ui/build
+
+  # ── Docker Build ───────────────────────────────────────────────
+  docker:
+    name: Docker Images
+    runs-on: ubuntu-latest
+    needs: [backend, ai-service, ui]
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          tags: ghcr.io/${{ github.repository }}/kitsune-backend:latest
+
+      - name: Build & push AI service image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./ai-service
+          push: true
+          tags: ghcr.io/${{ github.repository }}/kitsune-ai:latest
+
+      - name: Build & push UI image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./ui
+          push: true
+          tags: ghcr.io/${{ github.repository }}/kitsune-ui:latest

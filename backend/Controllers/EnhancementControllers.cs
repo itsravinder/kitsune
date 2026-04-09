@@ -73,6 +73,18 @@ namespace Kitsune.Backend.Controllers
             return ok ? Ok(new { message = "Deleted." }) : NotFound();
         }
 
+        /// <summary>
+        /// GET /api/connections/discover
+        /// Discovers all SQL Server instances visible on the local network
+        /// using SqlDataSourceEnumerator. Returns instance names + server names.
+        /// </summary>
+        [HttpGet("discover")]
+        public async Task<IActionResult> DiscoverInstances()
+        {
+            var instances = await _connMgr.DiscoverSqlInstancesAsync();
+            return Ok(new { count = instances.Count, instances });
+        }
+
         /// <summary>GET /api/connections/{id}/tree – schema explorer tree</summary>
         [HttpGet("{id:int}/tree")]
         public async Task<IActionResult> GetTree(int id)

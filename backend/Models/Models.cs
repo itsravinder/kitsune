@@ -354,10 +354,13 @@ namespace Kitsune.Backend.Models
         public string DatabaseType     { get; set; } = "SqlServer";
         public string Host             { get; set; } = "localhost";
         public int    Port             { get; set; } = 1433;
-        public string Database         { get; set; } = "";   // matches ConnectionManagerService
+        public string DatabaseName     { get; set; } = "";   // UI sends databaseName
         public string Username         { get; set; } = "";
         public string Password         { get; set; } = "";
-        public bool   TrustCertificate { get; set; } = true; // matches ConnectionManagerService
+        public bool   TrustCert        { get; set; } = true; // UI sends trustCert
+        // Aliases so ConnectionManagerService code still compiles
+        public string Database         => DatabaseName;
+        public bool   TrustCertificate => TrustCert;
     }
 
     // ── Schedules ─────────────────────────────────────────────
@@ -477,4 +480,16 @@ namespace Kitsune.Backend.Models
         public double   DurationMs   { get; set; }
         public DateTime CreatedAt    { get; set; }
     }
+
+    // ── SQL Server Instance Discovery ─────────────────────────
+
+    public class SqlInstanceInfo
+    {
+        public string ServerName    { get; set; } = "";  // e.g. RAVINDER
+        public string InstanceName  { get; set; } = "";  // e.g. RAVINDER_SQL (blank = default)
+        public string FullName      { get; set; } = "";  // e.g. localhost\RAVINDER_SQL
+        public string Version       { get; set; } = "";
+        public bool   IsDefault     { get; set; }        // true if no named instance
+    }
+
 }

@@ -37,6 +37,7 @@ namespace Kitsune.Backend.Services
         Task<SchemaTreeNode>          GetSchemaTreeAsync(int connectionId);
         Task<string?>                 GetObjectDefinitionAsync(int connectionId, string objectName, string objectType);
         Task                          EnsureTableAsync();
+        Task<List<SqlInstanceInfo>>   DiscoverSqlInstancesAsync();
     }
 
     public class ConnectionManagerService : IConnectionManagerService
@@ -131,10 +132,10 @@ namespace Kitsune.Backend.Services
             cmd.Parameters.AddWithValue("@Type",  req.DatabaseType);
             cmd.Parameters.AddWithValue("@Host",  req.Host);
             cmd.Parameters.AddWithValue("@Port",  port);
-            cmd.Parameters.AddWithValue("@Db",    req.Database);
+            cmd.Parameters.AddWithValue("@Db",    req.DatabaseName);
             cmd.Parameters.AddWithValue("@User",  req.Username ?? "");
             cmd.Parameters.AddWithValue("@Pwd",   enc);
-            cmd.Parameters.AddWithValue("@Trust", req.TrustCertificate);
+            cmd.Parameters.AddWithValue("@Trust", req.TrustCert);
             return Convert.ToInt32(await cmd.ExecuteScalarAsync());
         }
 
@@ -149,7 +150,7 @@ namespace Kitsune.Backend.Services
         {
             int port = req.Port > 0 ? req.Port : DefaultPorts.GetValueOrDefault(req.DatabaseType, 1433);
             string cs = BuildConnectionString(req.DatabaseType, req.Host, port,
-                req.Database, req.Username ?? "", req.Password ?? "", req.TrustCertificate);
+                req.DatabaseName, req.Username ?? "", req.Password ?? "", req.TrustCert);
             return await TestConnectionStringAsync(cs, req.DatabaseType);
         }
 
@@ -159,31 +160,40 @@ namespace Kitsune.Backend.Services
             var sw     = System.Diagnostics.Stopwatch.StartNew();
             try
             {
-                if (dbType == "MongoDB")
+                switch (dbType)
                 {
-                    var client = new MongoClient(connStr);
-                    var dbs    = await client.ListDatabaseNamesAsync();
-                    await dbs.MoveNextAsync();
-                    sw.Stop();
-                    result.Success      = true;
-                    result.Message      = "MongoDB connection successful.";
-                    result.ResponseMs   = sw.Elapsed.TotalMilliseconds;
-                    result.ServerVersion= "MongoDB";
-                }
-                else
-                {
-                    await using var conn = new SqlConnection(connStr);
-                    await conn.OpenAsync();
-                    await using var cmd  = new SqlCommand("SELECT @@VERSION, DB_NAME();", conn);
-                    await using var r    = await cmd.ExecuteReaderAsync();
-                    string version = "", dbName = "";
-                    if (await r.ReadAsync()) { version = r[0].ToString()!; dbName = r[1].ToString()!; }
-                    sw.Stop();
-                    result.Success      = true;
-                    result.Message      = $"Connected to {dbName}.";
-                    result.ServerVersion= version.Split('\n')[0].Trim();
-                    result.ResponseMs   = sw.Elapsed.TotalMilliseconds;
-                    result.DatabaseName = dbName;
+                    case "MongoDB":
+                    {
+                        var client = new MongoClient(connStr);
+                        var dbs    = await client.ListDatabaseNamesAsync();
+                        await dbs.MoveNextAsync();
+                        sw.Stop();
+                        result.Success       = true;
+                        result.Message       = "MongoDB connected successfully.";
+                        result.ResponseMs    = sw.Elapsed.TotalMilliseconds;
+                        result.ServerVersion = "MongoDB";
+                        break;
+                    }
+                    default: // SqlServer (and future MySQL/PostgreSQL via SqlClient-like)
+                    {
+                        await using var conn = new SqlConnection(connStr);
+                        await conn.OpenAsync();
+                        await using var cmd  = new SqlCommand("SELECT @@VERSION, DB_NAME();", conn);
+                        await using var r    = await cmd.ExecuteReaderAsync();
+                        string version = "", dbName = "";
+                        if (await r.ReadAsync())
+                        {
+                            version = r[0].ToString()!;
+                            dbName  = r[1].ToString()!;
+                        }
+                        sw.Stop();
+                        result.Success       = true;
+                        result.Message       = $"Connected to {dbName}.";
+                        result.ServerVersion = version.Split('\n')[0].Trim();
+                        result.ResponseMs    = sw.Elapsed.TotalMilliseconds;
+                        result.DatabaseName  = dbName;
+                        break;
+                    }
                 }
             }
             catch (Exception ex)
@@ -304,12 +314,79 @@ namespace Kitsune.Backend.Services
                     return $"mongodb://{user}:{pwd}@{host}:{port}/{db}";
                 return $"mongodb://{host}:{port}/{db}";
             }
+
+            // Named instances (e.g. localhost\RAVINDER_SQL) use dynamic ports.
+            // Do NOT add ,port to a named instance — it causes timeout errors.
+            bool isNamedInstance = host.Contains('\\');
+            string server = isNamedInstance ? host : $"{host},{port}";
+
             string auth = !string.IsNullOrEmpty(user)
                 ? $"User Id={user};Password={pwd};"
                 : "Trusted_Connection=True;";
-            return $"Server={host},{port};Database={db};{auth}TrustServerCertificate={(trustCert ? "True" : "False")};MultipleActiveResultSets=True;";
+
+            // Split trustCert into variable to avoid nested quote issues in interpolation
+            string tc = trustCert ? "True" : "False";
+            return $"Server={server};Database={db};{auth}TrustServerCertificate={tc};MultipleActiveResultSets=True;";
         }
 
+
+        public Task<List<SqlInstanceInfo>> DiscoverSqlInstancesAsync()
+        {
+            return Task.Run(() =>
+            {
+                var results = new List<SqlInstanceInfo>();
+                try
+                {
+                    // SqlDataSourceEnumerator broadcasts UDP to find visible instances
+                    var enumerator = System.Data.Sql.SqlDataSourceEnumerator.Instance;
+                    var table      = enumerator.GetDataSources();
+
+                    foreach (System.Data.DataRow row in table.Rows)
+                    {
+                        string server   = row["ServerName"]?.ToString()  ?? "";
+                        string instance = row["InstanceName"]?.ToString() ?? "";
+                        string version  = row["Version"]?.ToString()      ?? "";
+                        bool isDefault  = string.IsNullOrEmpty(instance);
+
+                        // Build the connection host string
+                        string fullName = isDefault ? server : $"{server}\\{instance}";
+
+                        // Map remote server names to localhost if they match this machine
+                        string machineName = System.Environment.MachineName;
+                        if (server.Equals(machineName, StringComparison.OrdinalIgnoreCase))
+                            fullName = isDefault ? "localhost" : $"localhost\\{instance}";
+
+                        results.Add(new SqlInstanceInfo
+                        {
+                            ServerName   = server,
+                            InstanceName = instance,
+                            FullName     = fullName,
+                            Version      = version,
+                            IsDefault    = isDefault,
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning(ex, "SQL instance discovery failed (SQL Browser may be stopped)");
+                }
+
+                // Always include localhost as fallback if no instances found
+                if (results.Count == 0)
+                {
+                    results.Add(new SqlInstanceInfo
+                    {
+                        ServerName   = "localhost",
+                        InstanceName = "",
+                        FullName     = "localhost",
+                        Version      = "Unknown",
+                        IsDefault    = true,
+                    });
+                }
+
+                return results;
+            });
+        }
         private static string Encrypt(string plain)
         {
             using var aes = Aes.Create();

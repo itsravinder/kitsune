@@ -96,7 +96,7 @@ namespace Kitsune.Backend.Services
         private static string EscapeField(string val, char sep)
         {
             if (val.Contains(sep) || val.Contains('"') || val.Contains('\n'))
-                return '"' + val.Replace(""", """") + '"';
+                return "\"" + val.Replace("\"", "\"\"") + "\"";
             return val;
         }
 

@@ -1,5 +1,5 @@
 // ============================================================
-// KITSUNE – Program.cs (v5 – all services + model loader)
+// KITSUNE – Program.cs (v6 – fixed middleware order + CORS)
 // ============================================================
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,14 +19,17 @@ builder.Services.AddControllers()
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
     c.SwaggerDoc("v1", new() { Title="KITSUNE API", Version="v1",
-        Description="AI Database Intelligence System – v5" }));
+        Description="AI Database Intelligence System – v6" }));
 
+// ── CORS – allow React UI on :3000 and :5173 ─────────────────
 builder.Services.AddCors(opts =>
     opts.AddPolicy("KitsuneCors", p =>
         p.WithOrigins(
-            "http://localhost:3000", "http://localhost:5173",
+            "http://localhost:3000",
+            "http://localhost:5173",
             builder.Configuration["Cors:AllowedOrigin"] ?? "")
-         .AllowAnyHeader().AllowAnyMethod()));
+         .AllowAnyHeader()
+         .AllowAnyMethod()));
 
 // ── All Domain Services ───────────────────────────────────────
 builder.Services.AddScoped<IDependencyValidationService, DependencyValidationService>();
@@ -44,8 +47,8 @@ builder.Services.AddScoped<IUserPreferencesService,      UserPreferencesService>
 builder.Services.AddScoped<ISqlScriptRunnerService,      SqlScriptRunnerService>();
 builder.Services.AddScoped<IDataExportService,           DataExportService>();
 builder.Services.AddScoped<INotificationService,         NotificationService>();
-builder.Services.AddScoped<IModelService,                ModelService>(); // NEW: dynamic models
-builder.Services.AddScoped<IQueryIntentService,          QueryIntentService>(); // v6: intent detection
+builder.Services.AddScoped<IModelService,                ModelService>();
+builder.Services.AddScoped<IQueryIntentService,          QueryIntentService>();
 
 builder.Services.AddHttpClient();
 builder.Services.AddHostedService<BackupSchedulerWorker>();
@@ -55,23 +58,33 @@ builder.Services.AddHealthChecks()
 
 var app = builder.Build();
 
+// ── Middleware pipeline – ORDER IS CRITICAL ───────────────────
+// 1. CORS must be first so preflight OPTIONS requests are handled
+//    before any other middleware rejects them
+app.UseCors("KitsuneCors");
+
+// 2. Custom middleware (logging, exceptions) come after CORS
 app.UseMiddleware<GlobalExceptionMiddleware>();
 app.UseMiddleware<RequestLoggingMiddleware>();
 
+// 3. Swagger only in Development
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI(c =>
-        c.SwaggerEndpoint("/swagger/v1/swagger.json", "KITSUNE API v5"));
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "KITSUNE API v6"));
 }
 
-app.UseCors("KitsuneCors");
+// 4. Routing, auth, controllers
 app.UseRouting();
 app.UseAuthorization();
 app.MapControllers();
-app.MapHealthChecks("/health");
 
-// ── Bootstrap all tables ──────────────────────────────────────
+// 5. Health endpoint – must explicitly require CORS policy
+//    otherwise the browser preflight OPTIONS is rejected
+app.MapHealthChecks("/health").RequireCors("KitsuneCors");
+
+// ── Bootstrap: create all Kitsune system tables on startup ────
 using (var scope = app.Services.CreateScope())
 {
     var svc = scope.ServiceProvider;
@@ -83,7 +96,7 @@ using (var scope = app.Services.CreateScope())
         await svc.GetRequiredService<IConnectionManagerService>().EnsureTableAsync();
         await svc.GetRequiredService<IScheduledBackupService>().EnsureTableAsync();
         await svc.GetRequiredService<IUserPreferencesService>().EnsureTableAsync();
-        log.LogInformation("KITSUNE v5 database tables ready");
+        log.LogInformation("KITSUNE v6 database tables ready");
     }
     catch (Exception ex)
     {
