@@ -139,11 +139,31 @@ export function useKitsune() {
       natural_language: nlQuery,
       database_type:    dbType,
       model,
-      database_name:    selectedDatabase,   // ← single source of truth
+      database_name:    selectedDatabase,
     });
+
     setSqlQuery(res.generated_query || '');
-    setGenMeta(`${res.display_name} · ${(res.confidence_score * 100).toFixed(0)}% · ${fmtMs(res.execution_ms)} · ${res.tokens_used} tokens${res.fallback_used ? ' · fallback' : ''}`);
-    notify('Query generated', 'success');
+
+    // Build rich metadata line including tables used
+    const tablesInfo = res.tables_used?.length
+      ? ` · Tables: ${res.tables_used.join(', ')}`
+      : '';
+    setGenMeta(
+      `${res.display_name} · ${(res.confidence_score * 100).toFixed(0)}% · ` +
+      `${fmtMs(res.execution_ms)} · ${res.tokens_used} tokens` +
+      `${res.fallback_used ? ' · fallback' : ''}${tablesInfo}`
+    );
+
+    // Store deepmap and tables for UI display
+    if (res.deepmap)      setSchema(prev => ({ ...prev, deepmap: res.deepmap }));
+    if (res.tables_used)  setSchema(prev => ({ ...prev, tablesUsed: res.tables_used }));
+
+    notify(
+      res.tables_used?.length
+        ? `Query generated using ${res.tables_used.length} table(s)`
+        : 'Query generated',
+      'success'
+    );
   });
 
   const handleValidate = handle('validate', async () => {

@@ -18,13 +18,15 @@ namespace Kitsune.Backend.Controllers
         private readonly ISchemaExtractionService _schema;
         private readonly IAuditLogService         _audit;
         private readonly ILogger<SchemaController> _log;
+        private readonly IConfiguration           _cfg;
 
         public SchemaController(
             ISchemaExtractionService schema,
             IAuditLogService audit,
-            ILogger<SchemaController> log)
+            ILogger<SchemaController> log,
+            IConfiguration cfg)
         {
-            _schema = schema; _audit = audit; _log = log;
+            _schema = schema; _audit = audit; _log = log; _cfg = cfg;
         }
 
         /// <summary>GET /api/schema/sqlserver?db=MyDatabase</summary>
@@ -63,6 +65,105 @@ namespace Kitsune.Backend.Controllers
         }
     }
 
+
+        /// <summary>
+        /// POST /api/schema/for-query
+        /// Returns compact schema (columns + FK joins) for specified tables only.
+        /// Used by AI service to build accurate SQL generation context.
+        /// Body: { tableNames: ["Orders","Customers"], databaseName: "KitsuneDB" }
+        /// </summary>
+        [HttpPost("for-query")]
+        public async Task<IActionResult> ForQuery([FromBody] SchemaForQueryRequest req)
+        {
+            string cs = _cfg.GetConnectionString("SqlServer") ?? "";
+            var result = new System.Collections.Generic.List<object>();
+
+            try
+            {
+                await using var conn = new SqlConnection(cs);
+                await conn.OpenAsync();
+
+                if (!string.IsNullOrEmpty(req.DatabaseName))
+                    conn.ChangeDatabase(req.DatabaseName);
+
+                foreach (var tableName in req.TableNames ?? new System.Collections.Generic.List<string>())
+                {
+                    var parts  = tableName.Split('.');
+                    var schema = parts.Length > 1 ? parts[0] : "dbo";
+                    var name   = parts.Length > 1 ? parts[1] : parts[0];
+
+                    // Columns
+                    const string colSql = @"
+                        SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE,
+                               COLUMNPROPERTY(OBJECT_ID(TABLE_SCHEMA+'.'+TABLE_NAME), COLUMN_NAME, 'IsIdentity') AS IsIdentity,
+                               (SELECT 1 FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
+                                INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+                                ON tc.CONSTRAINT_NAME=k.CONSTRAINT_NAME AND tc.CONSTRAINT_TYPE='PRIMARY KEY'
+                                WHERE k.TABLE_SCHEMA=c.TABLE_SCHEMA AND k.TABLE_NAME=c.TABLE_NAME
+                                AND k.COLUMN_NAME=c.COLUMN_NAME) AS IsPK
+                        FROM INFORMATION_SCHEMA.COLUMNS c
+                        WHERE TABLE_SCHEMA=@S AND TABLE_NAME=@T
+                        ORDER BY ORDINAL_POSITION;";
+
+                    var cols = new System.Collections.Generic.List<object>();
+                    await using (var cmd = new SqlCommand(colSql, conn))
+                    {
+                        cmd.Parameters.AddWithValue("@S", schema);
+                        cmd.Parameters.AddWithValue("@T", name);
+                        await using var r = await cmd.ExecuteReaderAsync();
+                        while (await r.ReadAsync())
+                            cols.Add(new {
+                                name       = r["COLUMN_NAME"].ToString(),
+                                type       = r["DATA_TYPE"].ToString(),
+                                nullable   = r["IS_NULLABLE"].ToString() == "YES",
+                                isPK       = r["IsPK"] != DBNull.Value,
+                                isIdentity = Convert.ToBoolean(r["IsIdentity"]),
+                            });
+                    }
+
+                    // Foreign keys
+                    const string fkSql = @"
+                        SELECT
+                            COL_NAME(fkc.parent_object_id, fkc.parent_column_id)   AS FromCol,
+                            OBJECT_SCHEMA_NAME(fkc.referenced_object_id)            AS ToSchema,
+                            OBJECT_NAME(fkc.referenced_object_id)                   AS ToTable,
+                            COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id) AS ToCol
+                        FROM sys.foreign_keys fk
+                        INNER JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
+                        WHERE fk.parent_object_id = OBJECT_ID(@SN);";
+
+                    var fks = new System.Collections.Generic.List<object>();
+                    await using (var cmd = new SqlCommand(fkSql, conn))
+                    {
+                        cmd.Parameters.AddWithValue("@SN", $"{schema}.{name}");
+                        await using var r = await cmd.ExecuteReaderAsync();
+                        while (await r.ReadAsync())
+                            fks.Add(new {
+                                fromColumn = r["FromCol"].ToString(),
+                                toSchema   = r["ToSchema"].ToString(),
+                                toTable    = r["ToTable"].ToString(),
+                                toColumn   = r["ToCol"].ToString(),
+                                join       = $"{schema}.{name}.{r["FromCol"]} = {r["ToSchema"]}.{r["ToTable"]}.{r["ToCol"]}",
+                            });
+                    }
+
+                    result.Add(new { schema, tableName = name, fullName = $"{schema}.{name}", columns = cols, foreignKeys = fks });
+                }
+
+                return Ok(new { database = conn.Database, tables = result });
+            }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "Schema for-query failed");
+                return StatusCode(500, new { error = ex.Message });
+            }
+        }
+
+    public class SchemaForQueryRequest
+    {
+        public System.Collections.Generic.List<string> TableNames    { get; set; } = new();
+        public string                                  DatabaseName  { get; set; } = "";
+    }
     // ── Audit Log Controller ──────────────────────────────────
     [ApiController]
     [Route("api/[controller]")]
