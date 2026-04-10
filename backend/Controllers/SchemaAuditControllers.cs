@@ -63,8 +63,6 @@ namespace Kitsune.Backend.Controllers
             var schema = await _schema.ExtractSqlServerSchemaAsync(db);
             return Ok(new { ddl = schema.DDLSummary, tableCount = schema.Tables.Count });
         }
-    }
-
 
         /// <summary>
         /// POST /api/schema/for-query
@@ -158,6 +156,8 @@ namespace Kitsune.Backend.Controllers
                 return StatusCode(500, new { error = ex.Message });
             }
         }
+
+    }
 
     public class SchemaForQueryRequest
     {

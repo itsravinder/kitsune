@@ -106,7 +106,6 @@ export const getDbInfo = () => get(BACKEND, '/api/db-info');
 export const invalidateSchemaCache = (db) => post(AI_SVC, '/cache/invalidate', { database_name: db });
 export const detectTables          = (b)  => post(AI_SVC, '/detect-tables',   b);
 export const cacheStatus           = ()   => get(AI_SVC,  '/cache/status');
-────
 export const generateQuery     = b  => post(AI_SVC,  '/generate',                     b);
 export const listModels        = ()  => get(AI_SVC,  '/models');          // AI service models
 export const explainQuery      = b  => post(AI_SVC,  '/explain',                      b);
