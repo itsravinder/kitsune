@@ -134,7 +134,7 @@ function Folder({ category, items, expanded, onToggle, onSelect, activeId, searc
   );
 }
 
-export function SchemaExplorer({ connectionId, dbType = 'SqlServer', onObjectSelect, visible }) {
+export function SchemaExplorer({ connectionId, dbType = 'SqlServer', onObjectSelect, visible, selectedDatabase }) {
   const [tree,     setTree]     = useState({});
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState('');
@@ -145,11 +145,12 @@ export function SchemaExplorer({ connectionId, dbType = 'SqlServer', onObjectSel
 
   // Fetch actual DB/server info from backend
   useEffect(() => {
-    fetch(`${BACKEND}/api/db-info`)
+    const dbParam = selectedDatabase ? `?db=${encodeURIComponent(selectedDatabase)}` : '';
+    fetch(`${BACKEND}/api/db-info${dbParam}`)
       .then(r => r.json())
       .then(d => setDbInfo(d))
       .catch(() => {});
-  }, [connectionId]);
+  }, [connectionId, selectedDatabase]);
 
   // Only use config for connected DB type
   const config = DB_TREE_CONFIG[dbType] || DB_TREE_CONFIG.SqlServer;
@@ -158,7 +159,8 @@ export function SchemaExplorer({ connectionId, dbType = 'SqlServer', onObjectSel
     if (!connectionId) return;
     setLoading(true); setError(''); setTree({});
     try {
-      const res  = await fetch(`${BACKEND}/api/connections/${connectionId}/tree`);
+      const dbParam = selectedDatabase ? `?db=${encodeURIComponent(selectedDatabase)}` : '';
+      const res  = await fetch(`${BACKEND}/api/connections/${connectionId}/tree${dbParam}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Load failed');
 
@@ -186,7 +188,7 @@ export function SchemaExplorer({ connectionId, dbType = 'SqlServer', onObjectSel
 
   useEffect(() => {
     if (visible && connectionId) loadTree();
-  }, [connectionId, visible, loadTree]);
+  }, [connectionId, visible, loadTree, selectedDatabase]);
 
   useEffect(() => { setSearch(''); setActiveId(''); }, [dbType]);
 

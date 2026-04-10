@@ -41,15 +41,21 @@ export default function KitsuneApp() {
   const mode = useModeManager();
 
   // ── Connection state ──────────────────────────────────────
-  const [connected,    setConnected]    = React.useState(false);
-  const [connInfo,     setConnInfo]     = React.useState(null);
-  const [showExplorer, setShowExplorer] = React.useState(true);
-  const [genLoading,   setGenLoading]   = React.useState(false);
+  const [connected,        setConnected]        = React.useState(false);
+  const [connInfo,         setConnInfo]         = React.useState(null);
+  const [showExplorer,     setShowExplorer]     = React.useState(true);
+  const [genLoading,       setGenLoading]       = React.useState(false);
+  // ── Single source of truth for selected database ──────────
+  const [selectedDatabase, setSelectedDatabase] = React.useState('');
 
   const handleConnected = (info) => {
     setConnInfo(info);
     setConnected(true);
-    if (info.databaseType) k.setDbType(info.databaseType);
+    if (info.databaseType)  k.setDbType(info.databaseType);
+    // Initialise selectedDatabase — single source of truth
+    const db = info.databaseName || '';
+    setSelectedDatabase(db);
+    k.setSelectedDatabase(db);   // keep useKitsune in sync for preview/generate
   };
 
   // ── Analyze query whenever SQL changes ────────────────────
@@ -247,8 +253,11 @@ export default function KitsuneApp() {
             background:T.bg3, border:`1px solid ${T.green}44`, color:T.green, fontSize:10,
           }}>
             <span style={{ width:6, height:6, borderRadius:'50%', background:T.green, flexShrink:0 }} />
-            {connInfo.connectionName}
-            <button onClick={() => setConnected(false)} style={{ background:'none', border:'none', color:T.txt3, cursor:'pointer', fontSize:11, padding:0, marginLeft:2 }}>×</button>
+            <span title={`Server: ${connInfo.host || connInfo.serverName || ''}`}>
+              {selectedDatabase || connInfo.databaseName || connInfo.connectionName}
+            </span>
+            <span style={{ color:'#334a60', fontSize:9 }}>@ {connInfo.host || connInfo.serverName || ''}</span>
+            <button onClick={() => setConnected(false)} style={{ background:'none', border:'none', color:'#334a60', cursor:'pointer', fontSize:11, padding:0, marginLeft:2 }}>×</button>
           </div>
         )}
 
@@ -291,6 +300,7 @@ export default function KitsuneApp() {
           dbType={k.dbType}
           onObjectSelect={handleSchemaObjectSelect}
           visible={showExplorer}
+          selectedDatabase={selectedDatabase}
         />
 
         {/* Left Editor Pane */}
@@ -454,7 +464,7 @@ export default function KitsuneApp() {
         background:'#030810', borderTop:`1px solid ${T.border}`, fontSize:10, color:T.txt3, flexShrink:0,
       }}>
         <span>🦊 KITSUNE v6.0</span>
-        {connInfo && <span style={{ color:T.green }}>✓ {connInfo.connectionName} ({k.dbType})</span>}
+        {connInfo && <span style={{ color:T.green }}>✓ {selectedDatabase || connInfo.databaseName} @ {connInfo.host || connInfo.serverName} ({k.dbType})</span>}
         <span>Confidence: <span style={{
           color: mode.confidenceScore >= 80 ? T.green : mode.confidenceScore >= 55 ? T.amber : T.red
         }}>{mode.confidenceScore}%</span></span>

@@ -97,14 +97,27 @@ namespace Kitsune.Backend.Controllers
         }
 
         /// <summary>GET /api/db-info — returns actual server + database name</summary>
+        /// <summary>
+        /// GET /api/db-info?db=KitsuneDB
+        /// Returns actual connected server + database.
+        /// If ?db= is supplied, switches to that DB first.
+        /// </summary>
         [HttpGet]
-        public async Task<IActionResult> GetDbInfo()
+        public async Task<IActionResult> GetDbInfo([FromQuery] string? db = null)
         {
             string cs = _cfg.GetConnectionString("SqlServer") ?? "";
             try
             {
                 await using var conn = new Microsoft.Data.SqlClient.SqlConnection(cs);
                 await conn.OpenAsync();
+
+                // Switch to requested DB if supplied and different
+                if (!string.IsNullOrEmpty(db) &&
+                    !conn.Database.Equals(db, StringComparison.OrdinalIgnoreCase))
+                {
+                    conn.ChangeDatabase(db);
+                }
+
                 await using var cmd = new Microsoft.Data.SqlClient.SqlCommand(
                     "SELECT @@SERVERNAME AS srv, DB_NAME() AS db, @@VERSION AS ver;", conn);
                 await using var r = await cmd.ExecuteReaderAsync();
@@ -123,9 +136,9 @@ namespace Kitsune.Backend.Controllers
             catch (Exception ex)
             {
                 _log.LogWarning(ex, "DB info query failed");
-                return Ok(new { serverName = "unknown", databaseName = "unknown", connected = false, error = ex.Message });
+                return Ok(new { serverName = "unknown", databaseName = db ?? "unknown", connected = false, error = ex.Message });
             }
-            return Ok(new { serverName = "unknown", databaseName = "unknown", connected = false });
+            return Ok(new { serverName = "unknown", databaseName = db ?? "unknown", connected = false });
         }
     }
 

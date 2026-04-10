@@ -1,10 +1,7 @@
 // ============================================================
-// KITSUNE – Preview Execution Service  (fixed)
-// Fixes:
-//   1. SET NOCOUNT ON  — eliminates row-count pseudo-result-sets
-//   2. USE [database]  — forces correct DB context
-//   3. Full logging    — DB name, server, query, row count
-//   4. Clean DataReader loop — columns from first real result set
+// KITSUNE – Preview Execution Service  (v2 – dynamic DB)
+// Single source of truth: request.DatabaseName drives everything
+// Falls back to connection string DB if not supplied
 // ============================================================
 using System;
 using System.Collections.Generic;
@@ -46,27 +43,33 @@ namespace Kitsune.Backend.Services
         {
             var response = new PreviewResponse { Mode = "SAFE_PREVIEW" };
 
-            // ── Guard ─────────────────────────────────────────────────
             if (DangerousPatterns.IsMatch(request.SqlQuery))
             {
                 response.Success = false;
-                response.Errors.Add("SAFE MODE: Destructive DDL (DROP TABLE, TRUNCATE etc.) blocked.");
+                response.Errors.Add("SAFE MODE: Destructive DDL blocked.");
                 return response;
             }
 
-            // ── Log incoming query ────────────────────────────────────
             var snippet = request.SqlQuery.Length > 120
                 ? request.SqlQuery[..120] + "…"
                 : request.SqlQuery;
-            _logger.LogInformation("[PREVIEW] Incoming query: {Query}", snippet);
+
+            // ── Resolve target database ───────────────────────────────
+            // Priority: 1. request.DatabaseName (UI selection)
+            //           2. Database= in connection string
+            //           3. Whatever SQL Server defaults to (master)
+            string? requestedDb = string.IsNullOrWhiteSpace(request.DatabaseName)
+                ? ExtractDatabaseFromConnStr(_connectionString)
+                : request.DatabaseName.Trim();
+
+            _logger.LogInformation(
+                "[PREVIEW] Query incoming | requestedDb={Db} | snippet={Snippet}",
+                requestedDb ?? "(none)", snippet);
 
             var stopwatch = Stopwatch.StartNew();
-
             try
             {
                 await using var conn = new SqlConnection(_connectionString);
-
-                // Capture SQL Server info messages (PRINT, row counts, warnings)
                 conn.InfoMessage += (_, e) =>
                 {
                     foreach (SqlError msg in e.Errors)
@@ -75,74 +78,77 @@ namespace Kitsune.Backend.Services
 
                 await conn.OpenAsync();
 
-                // ── Log which DB and server we actually connected to ──
-                string actualDb     = conn.Database;
-                string actualServer = conn.DataSource;
-                _logger.LogInformation("[PREVIEW] Connected to server={Server} database={Database}",
-                    actualServer, actualDb);
-                response.Messages.Add($"[DEBUG] Server: {actualServer}  Database: {actualDb}");
+                string connectedDb = conn.Database;
+                string connectedServer = conn.DataSource;
 
-                // ── Force correct DB (guards against appsettings mismatch) ──
-                // Extract database name from connection string
-                string? targetDb = ExtractDatabaseFromConnStr(_connectionString);
-                if (!string.IsNullOrEmpty(targetDb)
-                    && !actualDb.Equals(targetDb, StringComparison.OrdinalIgnoreCase))
+                // Switch to requested DB if different from what connection opened on
+                if (!string.IsNullOrEmpty(requestedDb)
+                    && !connectedDb.Equals(requestedDb, StringComparison.OrdinalIgnoreCase))
                 {
-                    _logger.LogWarning("[PREVIEW] DB mismatch! Connected to '{Actual}', expected '{Target}'. Switching.",
-                        actualDb, targetDb);
-                    conn.ChangeDatabase(targetDb);
-                    actualDb = conn.Database;
-                    _logger.LogInformation("[PREVIEW] Switched to database={Database}", actualDb);
+                    _logger.LogWarning(
+                        "[PREVIEW] DB mismatch — connected={Connected}, requested={Requested}. Switching.",
+                        connectedDb, requestedDb);
+                    conn.ChangeDatabase(requestedDb);
+                    connectedDb = conn.Database;
                 }
 
-                // ── Build the safe wrapped script ─────────────────────
-                string safeScript = BuildSafeScript(request, actualDb);
-                _logger.LogDebug("[PREVIEW] Executing script:\n{Script}", safeScript);
+                _logger.LogInformation(
+                    "[PREVIEW] Executing on server={Server} db={Db}",
+                    connectedServer, connectedDb);
+
+                // Validate: confirm we are on the right DB before running
+                if (!string.IsNullOrEmpty(requestedDb)
+                    && !connectedDb.Equals(requestedDb, StringComparison.OrdinalIgnoreCase))
+                {
+                    response.Success = false;
+                    response.Errors.Add(
+                        $"DB validation failed: connected to '{connectedDb}' but requested '{requestedDb}'. " +
+                        "Check connection string.");
+                    return response;
+                }
+
+                // Expose to caller so UI can confirm which DB was used
+                response.Messages.Add($"[DB] Server: {connectedServer}  Database: {connectedDb}");
+
+                string safeScript = BuildSafeScript(request.SqlQuery, request.IsStoredProc, connectedDb);
+                _logger.LogDebug("[PREVIEW] Script:\n{Script}", safeScript);
 
                 await using var cmd = new SqlCommand(safeScript, conn)
                 {
-                    CommandTimeout = Math.Min(request.TimeoutSeconds > 0 ? request.TimeoutSeconds : 30, 120)
+                    CommandTimeout = Math.Min(
+                        request.TimeoutSeconds > 0 ? request.TimeoutSeconds : 30, 120)
                 };
 
                 if (request.Parameters is not null)
-                {
                     foreach (var (key, value) in request.Parameters)
                         cmd.Parameters.AddWithValue(
                             key.StartsWith("@") ? key : "@" + key,
                             value ?? DBNull.Value);
-                }
 
-                // ── Execute and read ──────────────────────────────────
-                // CommandBehavior.Default: all result sets returned
                 await using var reader = await cmd.ExecuteReaderAsync(CommandBehavior.Default);
 
-                bool capturedColumns = false;
-                int  resultSetIndex  = 0;
+                bool capturedCols = false;
+                int  setIndex     = 0;
 
                 do
                 {
-                    resultSetIndex++;
-
-                    // Only care about result sets that actually have columns (real SELECT output)
-                    // Skip "rows affected" pseudo result sets (FieldCount == 0)
+                    setIndex++;
                     if (reader.FieldCount == 0)
                     {
-                        _logger.LogDebug("[PREVIEW] Result set {N} has 0 fields — skipping (row-count set)", resultSetIndex);
+                        _logger.LogDebug("[PREVIEW] Result set {N}: 0 fields — skipping", setIndex);
                         continue;
                     }
 
-                    // Capture columns from the first real result set
-                    if (!capturedColumns)
+                    if (!capturedCols)
                     {
                         for (int i = 0; i < reader.FieldCount; i++)
                             response.Columns.Add(reader.GetName(i));
-                        capturedColumns = true;
-                        _logger.LogDebug("[PREVIEW] Columns captured from result set {N}: [{Cols}]",
-                            resultSetIndex, string.Join(", ", response.Columns));
+                        capturedCols = true;
+                        _logger.LogDebug("[PREVIEW] Columns: [{Cols}]",
+                            string.Join(", ", response.Columns));
                     }
 
-                    // Read rows
-                    int rowsThisSet = 0;
+                    int rowsRead = 0;
                     while (await reader.ReadAsync())
                     {
                         var row = new Dictionary<string, object?>();
@@ -152,15 +158,14 @@ namespace Kitsune.Backend.Services
                             row[reader.GetName(i)] = val is DBNull ? null : val;
                         }
                         response.ResultSet.Add(row);
-                        rowsThisSet++;
-
+                        rowsRead++;
                         if (response.ResultSet.Count >= 500)
                         {
                             response.Messages.Add("PREVIEW TRUNCATED: first 500 rows shown.");
                             break;
                         }
                     }
-                    _logger.LogDebug("[PREVIEW] Result set {N}: {Rows} rows read", resultSetIndex, rowsThisSet);
+                    _logger.LogDebug("[PREVIEW] Result set {N}: {Rows} rows", setIndex, rowsRead);
 
                 } while (await reader.NextResultAsync());
 
@@ -170,8 +175,8 @@ namespace Kitsune.Backend.Services
                 response.Success     = true;
 
                 _logger.LogInformation(
-                    "[PREVIEW] Done. DB={DB} Rows={Rows} Cols={Cols} Time={Ms}ms",
-                    actualDb, response.RowCount, response.Columns.Count,
+                    "[PREVIEW] Done | DB={Db} Rows={Rows} Cols={Cols} {Ms}ms",
+                    connectedDb, response.RowCount, response.Columns.Count,
                     stopwatch.Elapsed.TotalMilliseconds.ToString("F0"));
             }
             catch (SqlException ex)
@@ -180,74 +185,69 @@ namespace Kitsune.Backend.Services
                 response.ExecutionMs = stopwatch.Elapsed.TotalMilliseconds;
                 response.Success     = false;
                 foreach (SqlError err in ex.Errors)
-                    response.Errors.Add($"[Line {err.LineNumber}] SQL Error {err.Number}: {err.Message}");
-                _logger.LogWarning(ex, "[PREVIEW] SQL error for: {Query}", snippet);
+                    response.Errors.Add($"[Line {err.LineNumber}] SQL {err.Number}: {err.Message}");
+                _logger.LogWarning(ex, "[PREVIEW] SQL error | {Snippet}", snippet);
             }
             catch (Exception ex)
             {
                 stopwatch.Stop();
                 response.ExecutionMs = stopwatch.Elapsed.TotalMilliseconds;
                 response.Success     = false;
-                response.Errors.Add($"Execution error: {ex.Message}");
+                response.Errors.Add($"Error: {ex.Message}");
                 _logger.LogError(ex, "[PREVIEW] Unexpected error");
             }
 
             return response;
         }
 
-        // ── Wrap in BEGIN TRAN / ROLLBACK ─────────────────────────────
-        private static string BuildSafeScript(PreviewRequest request, string dbName)
+        // ── Safe script builder ───────────────────────────────────────
+        private static string BuildSafeScript(string sql, bool isStoredProc, string dbName)
         {
-            // USE [db] forces correct database context regardless of connection string
+            // USE [db] is the single source of truth for DB context.
+            // SET NOCOUNT ON suppresses row-count pseudo-result-sets.
             string useDb = !string.IsNullOrEmpty(dbName) ? $"USE [{dbName}];\n" : "";
 
-            if (request.IsStoredProc)
+            if (isStoredProc)
             {
                 return $@"{useDb}SET NOCOUNT ON;
 SET XACT_ABORT ON;
 BEGIN TRANSACTION;
 BEGIN TRY
-    EXEC {SanitizeName(request.SqlQuery)};
+    EXEC {SanitizeName(sql)};
     ROLLBACK TRANSACTION;
 END TRY
 BEGIN CATCH
     IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
-    DECLARE @ErrMsg  NVARCHAR(4000) = ERROR_MESSAGE();
-    DECLARE @ErrLine INT            = ERROR_LINE();
-    RAISERROR('[KITSUNE] SP Error at line %d: %s', 16, 1, @ErrLine, @ErrMsg);
+    DECLARE @Msg  NVARCHAR(4000) = ERROR_MESSAGE();
+    DECLARE @Line INT            = ERROR_LINE();
+    RAISERROR('[KITSUNE] SP error at line %d: %s', 16, 1, @Line, @Msg);
 END CATCH;";
             }
-            else
-            {
-                // SET NOCOUNT ON: suppresses "N rows affected" messages
-                // that appear as extra pseudo-result-sets with SET NOCOUNT OFF
-                // This is the key fix for 0-row SELECT queries
-                return $@"{useDb}SET NOCOUNT ON;
+
+            return $@"{useDb}SET NOCOUNT ON;
 SET XACT_ABORT ON;
 BEGIN TRANSACTION;
 BEGIN TRY
 
-{request.SqlQuery}
+{sql}
 
     ROLLBACK TRANSACTION;
 END TRY
 BEGIN CATCH
     IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
-    DECLARE @ErrMsg  NVARCHAR(4000) = ERROR_MESSAGE();
-    DECLARE @ErrLine INT            = ERROR_LINE();
-    RAISERROR('[KITSUNE] Error at line %d: %s', 16, 1, @ErrLine, @ErrMsg);
+    DECLARE @Msg  NVARCHAR(4000) = ERROR_MESSAGE();
+    DECLARE @Line INT            = ERROR_LINE();
+    RAISERROR('[KITSUNE] Error at line %d: %s', 16, 1, @Line, @Msg);
 END CATCH;";
-            }
         }
 
         private static string SanitizeName(string name) =>
             Regex.Replace(name, @"[^\w\.\[\]@]", "");
 
-        // ── Extract Database= from connection string ──────────────────
         private static string? ExtractDatabaseFromConnStr(string cs)
         {
-            // Handles both "Database=X" and "Initial Catalog=X"
-            var m = Regex.Match(cs, @"(?:Database|Initial\s+Catalog)\s*=\s*([^;]+)",
+            var m = Regex.Match(cs,
+                @"(?:Database|Initial\s+Catalog)\s*=\s*([^;]+)",
                 RegexOptions.IgnoreCase);
             return m.Success ? m.Groups[1].Value.Trim() : null;
         }

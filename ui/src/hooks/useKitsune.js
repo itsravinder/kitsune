@@ -11,13 +11,15 @@ const fmtMs   = ms => (ms < 1000 ? `${ms.toFixed(0)}ms` : `${(ms / 1000).toFixed
 
 export function useKitsune() {
   // ── Core inputs ───────────────────────────────────────────
-  const [nlQuery,      setNlQuery]      = useState('Show all customers who placed orders in the last 30 days with their total spend');
-  const [sqlQuery,     setSqlQuery]     = useState('');
-  const [objectName,   setObjectName]   = useState('');
-  const [objectType,   setObjectType]   = useState('PROCEDURE');
-  const [dbType,       setDbType]       = useState('SqlServer');
-  const [model,        setModel]        = useState('auto');
-  const [activeTab,    setActiveTab]    = useState('results');
+  const [nlQuery,          setNlQuery]          = useState('Show all customers who placed orders in the last 30 days with their total spend');
+  const [sqlQuery,         setSqlQuery]         = useState('');
+  const [objectName,       setObjectName]       = useState('');
+  const [objectType,       setObjectType]       = useState('PROCEDURE');
+  const [dbType,           setDbType]           = useState('SqlServer');
+  const [model,            setModel]            = useState('auto');
+  const [activeTab,        setActiveTab]        = useState('results');
+  // ── Single source of truth for database context ───────────
+  const [selectedDatabase, setSelectedDatabase] = useState('');
 
   // ── Data ─────────────────────────────────────────────────
   const [models,          setModels]          = useState([]);
@@ -133,7 +135,12 @@ export function useKitsune() {
   // ── All action handlers ───────────────────────────────────
   const handleGenerate = handle('gen', async () => {
     setGenMeta('');
-    const res = await api.generateQuery({ natural_language: nlQuery, database_type: dbType, model });
+    const res = await api.generateQuery({
+      natural_language: nlQuery,
+      database_type:    dbType,
+      model,
+      database_name:    selectedDatabase,   // ← single source of truth
+    });
     setSqlQuery(res.generated_query || '');
     setGenMeta(`${res.display_name} · ${(res.confidence_score * 100).toFixed(0)}% · ${fmtMs(res.execution_ms)} · ${res.tokens_used} tokens${res.fallback_used ? ' · fallback' : ''}`);
     notify('Query generated', 'success');
@@ -147,10 +154,14 @@ export function useKitsune() {
   });
 
   const handlePreview = handle('preview', async () => {
-    // Debug: log what we're sending
-    console.log('[KITSUNE] Preview request:', { sqlQuery, isStoredProc: false });
+    console.log('[KITSUNE] Preview request:', { sqlQuery, databaseName: selectedDatabase });
 
-    const res = await api.previewQuery({ sqlQuery, isStoredProc: false, timeoutSeconds: 30 });
+    const res = await api.previewQuery({
+      sqlQuery,
+      isStoredProc:   false,
+      timeoutSeconds: 30,
+      databaseName:   selectedDatabase,   // ← single source of truth
+    });
 
     // Debug: log raw response
     console.log('[KITSUNE] Preview response:', {
@@ -316,6 +327,8 @@ export function useKitsune() {
     objectName, setObjectName, objectType, setObjectType,
     dbType, setDbType, model, setModel,
     activeTab, setActiveTab,
+    // DB context (single source of truth)
+    selectedDatabase, setSelectedDatabase,
     // Models (dynamic)
     models, modelsLoading, loadModels,
     // Data

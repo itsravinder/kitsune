@@ -94,6 +94,7 @@ namespace Kitsune.Backend.Models
         public bool   IsStoredProc   { get; set; }
         public Dictionary<string, object>? Parameters { get; set; }
         public int    TimeoutSeconds { get; set; } = 30;
+        public string DatabaseName   { get; set; } = "";  // dynamic DB context from UI
     }
 
     public class PreviewResponse

@@ -85,13 +85,13 @@ namespace Kitsune.Backend.Controllers
             return Ok(new { count = instances.Count, instances });
         }
 
-        /// <summary>GET /api/connections/{id}/tree – schema explorer tree</summary>
+        /// <summary>GET /api/connections/{id}/tree?db=KitsuneDB – schema explorer tree</summary>
         [HttpGet("{id:int}/tree")]
-        public async Task<IActionResult> GetTree(int id)
+        public async Task<IActionResult> GetTree(int id, [FromQuery] string? db = null)
         {
             try
             {
-                var tree = await _connMgr.GetSchemaTreeAsync(id);
+                var tree = await _connMgr.GetSchemaTreeAsync(id, db);
                 return Ok(tree);
             }
             catch (Exception ex)

@@ -34,7 +34,7 @@ namespace Kitsune.Backend.Services
         Task<ConnectionTestResult>    TestRawAsync(SaveProfileRequest req);
         Task<bool>                    DeleteProfileAsync(int id);
         Task<string>                  GetConnectionStringAsync(int id);
-        Task<SchemaTreeNode>          GetSchemaTreeAsync(int connectionId);
+        Task<SchemaTreeNode>          GetSchemaTreeAsync(int connectionId, string? dbOverride = null);
         Task<string?>                 GetObjectDefinitionAsync(int connectionId, string objectName, string objectType);
         Task                          EnsureTableAsync();
         Task<List<SqlInstanceInfo>>   DiscoverSqlInstancesAsync();
@@ -235,10 +235,19 @@ namespace Kitsune.Backend.Services
             return BuildConnectionString(dbType, host, port, db, user, pwd, trust);
         }
 
-        public async Task<SchemaTreeNode> GetSchemaTreeAsync(int connectionId)
+        public async Task<SchemaTreeNode> GetSchemaTreeAsync(int connectionId, string? dbOverride = null)
         {
             string cs = await GetConnectionStringAsync(connectionId);
             string dt = await GetDatabaseTypeAsync(connectionId);
+
+            // If caller specifies a different DB, inject it into the connection string
+            if (!string.IsNullOrEmpty(dbOverride))
+            {
+                var csb = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(cs);
+                csb.InitialCatalog = dbOverride;
+                cs = csb.ConnectionString;
+            }
+
             var root  = new SchemaTreeNode { Id = "root", Label = dt, Type = "database", HasChildren = true };
 
             if (dt == "MongoDB")
