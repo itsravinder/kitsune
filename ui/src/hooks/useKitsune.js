@@ -142,25 +142,35 @@ export function useKitsune() {
       database_name:    selectedDatabase,
     });
 
-    setSqlQuery(res.generated_query || '');
+    // Use .query or .generated_query (both are set)
+    setSqlQuery(res.query || res.generated_query || '');
 
-    // Build rich metadata line including tables used
+    // Populate schema state so UI tabs (Schema, Deepmap, Explain) have data
+    setSchema(prev => ({
+      ...prev,
+      // AI generate response fields → UI tabs
+      aiQuery:    res.query            || res.generated_query || '',
+      explanation:res.explanation      || '',
+      schemaUsed: res.schema           || res.schema_used     || '',
+      deepmap:    res.deepmap          || '',
+      tablesUsed: res.tables_used      || [],
+    }));
+
+    // Store explanation separately for the Explain tab
+    if (res.explanation) setExplanation(res.explanation);
+
     const tablesInfo = res.tables_used?.length
       ? ` · Tables: ${res.tables_used.join(', ')}`
       : '';
     setGenMeta(
-      `${res.display_name} · ${(res.confidence_score * 100).toFixed(0)}% · ` +
-      `${fmtMs(res.execution_ms)} · ${res.tokens_used} tokens` +
+      `${res.display_name || 'AI'} · ${((res.confidence_score || 0) * 100).toFixed(0)}% · ` +
+      `${fmtMs(res.execution_ms || 0)} · ${res.tokens_used || 0} tokens` +
       `${res.fallback_used ? ' · fallback' : ''}${tablesInfo}`
     );
 
-    // Store deepmap and tables for UI display
-    if (res.deepmap)      setSchema(prev => ({ ...prev, deepmap: res.deepmap }));
-    if (res.tables_used)  setSchema(prev => ({ ...prev, tablesUsed: res.tables_used }));
-
     notify(
       res.tables_used?.length
-        ? `Query generated using ${res.tables_used.length} table(s)`
+        ? `Generated using ${res.tables_used.length} table(s): ${res.tables_used.slice(0,3).join(', ')}`
         : 'Query generated',
       'success'
     );

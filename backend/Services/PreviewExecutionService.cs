@@ -1,7 +1,11 @@
 // ============================================================
-// KITSUNE – Preview Execution Service  (v2 – dynamic DB)
-// Single source of truth: request.DatabaseName drives everything
-// Falls back to connection string DB if not supplied
+// KITSUNE – Preview Execution Service  (v3 – clean DB context)
+// DB context rules:
+//   1. NEVER use USE [db] statement — it overrides conn.ChangeDatabase()
+//      and hardcodes a DB name into the script text
+//   2. DB is set ONCE via conn.ChangeDatabase(requestedDb)
+//   3. requestedDb = request.DatabaseName (UI) or connection-string DB
+//   4. If requestedDb is empty/invalid → use whatever the conn opened on
 // ============================================================
 using System;
 using System.Collections.Generic;
@@ -54,19 +58,29 @@ namespace Kitsune.Backend.Services
                 ? request.SqlQuery[..120] + "…"
                 : request.SqlQuery;
 
-            // ── Resolve target database ───────────────────────────────
-            // Priority: 1. request.DatabaseName (UI selection)
-            //           2. Database= in connection string
-            //           3. Whatever SQL Server defaults to (master)
+            // ── Resolve target DB ─────────────────────────────────────
+            // Priority order:
+            //   1. request.DatabaseName — set by UI selectedDatabase
+            //   2. Database= in the appsettings connection string
+            //   3. Leave connection on whatever it opened on (do not crash)
             string? requestedDb = string.IsNullOrWhiteSpace(request.DatabaseName)
                 ? ExtractDatabaseFromConnStr(_connectionString)
                 : request.DatabaseName.Trim();
 
-            _logger.LogInformation(
-                "[PREVIEW] Query incoming | requestedDb={Db} | snippet={Snippet}",
-                requestedDb ?? "(none)", snippet);
+            // Reject obviously wrong values (e.g. "SqlServer" fell through from UI bug)
+            if (requestedDb != null && (
+                requestedDb.Equals("SqlServer",  StringComparison.OrdinalIgnoreCase) ||
+                requestedDb.Equals("MongoDB",    StringComparison.OrdinalIgnoreCase) ||
+                requestedDb.Equals("MySQL",      StringComparison.OrdinalIgnoreCase) ||
+                requestedDb.Equals("PostgreSQL", StringComparison.OrdinalIgnoreCase)))
+            {
+                _logger.LogWarning("[PREVIEW] Ignoring invalid databaseName '{Db}' — using connection string default", requestedDb);
+                requestedDb = ExtractDatabaseFromConnStr(_connectionString);
+            }
 
-            var stopwatch = Stopwatch.StartNew();
+            _logger.LogInformation("[PREVIEW] requestedDb={Db} | {Snippet}", requestedDb ?? "(default)", snippet);
+
+            var sw = Stopwatch.StartNew();
             try
             {
                 await using var conn = new SqlConnection(_connectionString);
@@ -77,40 +91,41 @@ namespace Kitsune.Backend.Services
                 };
 
                 await conn.OpenAsync();
-
-                string connectedDb = conn.Database;
+                string connectedDb     = conn.Database;
                 string connectedServer = conn.DataSource;
 
-                // Switch to requested DB if different from what connection opened on
+                // Switch DB via ADO.NET — this is the ONLY place DB is set
+                // NO USE statement is injected into the SQL script
                 if (!string.IsNullOrEmpty(requestedDb)
                     && !connectedDb.Equals(requestedDb, StringComparison.OrdinalIgnoreCase))
                 {
-                    _logger.LogWarning(
-                        "[PREVIEW] DB mismatch — connected={Connected}, requested={Requested}. Switching.",
-                        connectedDb, requestedDb);
-                    conn.ChangeDatabase(requestedDb);
-                    connectedDb = conn.Database;
+                    _logger.LogInformation("[PREVIEW] ChangeDatabase: {From} → {To}", connectedDb, requestedDb);
+                    try
+                    {
+                        conn.ChangeDatabase(requestedDb);
+                        connectedDb = conn.Database;
+                    }
+                    catch (Exception dbEx)
+                    {
+                        _logger.LogWarning("[PREVIEW] ChangeDatabase failed: {Err} — staying on {Db}", dbEx.Message, connectedDb);
+                        response.Messages.Add($"[WARN] Could not switch to '{requestedDb}': {dbEx.Message}. Using '{connectedDb}'.");
+                    }
                 }
 
-                _logger.LogInformation(
-                    "[PREVIEW] Executing on server={Server} db={Db}",
-                    connectedServer, connectedDb);
+                _logger.LogInformation("[PREVIEW] Executing on {Server}/{Db}", connectedServer, connectedDb);
+                response.Messages.Add($"[DB] {connectedServer} / {connectedDb}");
 
-                // Validate: confirm we are on the right DB before running
+                // Validate only if a DB was explicitly requested
                 if (!string.IsNullOrEmpty(requestedDb)
                     && !connectedDb.Equals(requestedDb, StringComparison.OrdinalIgnoreCase))
                 {
                     response.Success = false;
-                    response.Errors.Add(
-                        $"DB validation failed: connected to '{connectedDb}' but requested '{requestedDb}'. " +
-                        "Check connection string.");
+                    response.Errors.Add($"Could not execute on '{requestedDb}' (connected to '{connectedDb}'). Check the database name.");
                     return response;
                 }
 
-                // Expose to caller so UI can confirm which DB was used
-                response.Messages.Add($"[DB] Server: {connectedServer}  Database: {connectedDb}");
-
-                string safeScript = BuildSafeScript(request.SqlQuery, request.IsStoredProc, connectedDb);
+                // Build script — NO USE statement, DB already set via ChangeDatabase
+                string safeScript = BuildSafeScript(request.SqlQuery, request.IsStoredProc);
                 _logger.LogDebug("[PREVIEW] Script:\n{Script}", safeScript);
 
                 await using var cmd = new SqlCommand(safeScript, conn)
@@ -128,14 +143,14 @@ namespace Kitsune.Backend.Services
                 await using var reader = await cmd.ExecuteReaderAsync(CommandBehavior.Default);
 
                 bool capturedCols = false;
-                int  setIndex     = 0;
+                int  setIdx       = 0;
 
                 do
                 {
-                    setIndex++;
+                    setIdx++;
                     if (reader.FieldCount == 0)
                     {
-                        _logger.LogDebug("[PREVIEW] Result set {N}: 0 fields — skipping", setIndex);
+                        _logger.LogDebug("[PREVIEW] Result set {N}: 0 fields — skip", setIdx);
                         continue;
                     }
 
@@ -144,8 +159,6 @@ namespace Kitsune.Backend.Services
                         for (int i = 0; i < reader.FieldCount; i++)
                             response.Columns.Add(reader.GetName(i));
                         capturedCols = true;
-                        _logger.LogDebug("[PREVIEW] Columns: [{Cols}]",
-                            string.Join(", ", response.Columns));
                     }
 
                     int rowsRead = 0;
@@ -165,24 +178,23 @@ namespace Kitsune.Backend.Services
                             break;
                         }
                     }
-                    _logger.LogDebug("[PREVIEW] Result set {N}: {Rows} rows", setIndex, rowsRead);
+                    _logger.LogDebug("[PREVIEW] Set {N}: {Rows} rows", setIdx, rowsRead);
 
                 } while (await reader.NextResultAsync());
 
-                stopwatch.Stop();
+                sw.Stop();
                 response.RowCount    = response.ResultSet.Count;
-                response.ExecutionMs = stopwatch.Elapsed.TotalMilliseconds;
+                response.ExecutionMs = sw.Elapsed.TotalMilliseconds;
                 response.Success     = true;
 
-                _logger.LogInformation(
-                    "[PREVIEW] Done | DB={Db} Rows={Rows} Cols={Cols} {Ms}ms",
+                _logger.LogInformation("[PREVIEW] Done | DB={Db} Rows={R} Cols={C} {Ms}ms",
                     connectedDb, response.RowCount, response.Columns.Count,
-                    stopwatch.Elapsed.TotalMilliseconds.ToString("F0"));
+                    sw.Elapsed.TotalMilliseconds.ToString("F0"));
             }
             catch (SqlException ex)
             {
-                stopwatch.Stop();
-                response.ExecutionMs = stopwatch.Elapsed.TotalMilliseconds;
+                sw.Stop();
+                response.ExecutionMs = sw.Elapsed.TotalMilliseconds;
                 response.Success     = false;
                 foreach (SqlError err in ex.Errors)
                     response.Errors.Add($"[Line {err.LineNumber}] SQL {err.Number}: {err.Message}");
@@ -190,8 +202,8 @@ namespace Kitsune.Backend.Services
             }
             catch (Exception ex)
             {
-                stopwatch.Stop();
-                response.ExecutionMs = stopwatch.Elapsed.TotalMilliseconds;
+                sw.Stop();
+                response.ExecutionMs = sw.Elapsed.TotalMilliseconds;
                 response.Success     = false;
                 response.Errors.Add($"Error: {ex.Message}");
                 _logger.LogError(ex, "[PREVIEW] Unexpected error");
@@ -200,16 +212,16 @@ namespace Kitsune.Backend.Services
             return response;
         }
 
-        // ── Safe script builder ───────────────────────────────────────
-        private static string BuildSafeScript(string sql, bool isStoredProc, string dbName)
+        // ── Script builder — NO USE statement ────────────────────────
+        // The connection's DB is already set via ChangeDatabase() above.
+        // Injecting USE [db] would:
+        //   a) Hardcode a DB name into the script (breaks when user selects a different DB)
+        //   b) Override the ChangeDatabase() call silently
+        private static string BuildSafeScript(string sql, bool isStoredProc)
         {
-            // USE [db] is the single source of truth for DB context.
-            // SET NOCOUNT ON suppresses row-count pseudo-result-sets.
-            string useDb = !string.IsNullOrEmpty(dbName) ? $"USE [{dbName}];\n" : "";
-
             if (isStoredProc)
             {
-                return $@"{useDb}SET NOCOUNT ON;
+                return $@"SET NOCOUNT ON;
 SET XACT_ABORT ON;
 BEGIN TRANSACTION;
 BEGIN TRY
@@ -224,7 +236,7 @@ BEGIN CATCH
 END CATCH;";
             }
 
-            return $@"{useDb}SET NOCOUNT ON;
+            return $@"SET NOCOUNT ON;
 SET XACT_ABORT ON;
 BEGIN TRANSACTION;
 BEGIN TRY

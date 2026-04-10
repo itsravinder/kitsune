@@ -159,7 +159,7 @@ export function ConnectionScreen({ onConnected }) {
         body: JSON.stringify({
           name: connName || host, databaseType: dbType,
           host: host || 'localhost', port,
-          databaseName: dbName || test.databaseName || '',
+          databaseName: dbName.trim() || test.databaseName || '',
           username: user, password: pass, trustCert,
         }),
       });
@@ -168,7 +168,9 @@ export function ConnectionScreen({ onConnected }) {
       onConnected({
         profileId:      saved.id,
         databaseType:   dbType,
-        databaseName:   dbName || test.databaseName || dbType,
+        // Use user-typed DB name first, then what DB_NAME() returned from the test
+        // NEVER fall back to dbType string (e.g. "SqlServer") — that is not a DB name
+        databaseName:   dbName.trim() || test.databaseName || '',
         host:           host || 'localhost',
         serverVersion:  test.serverVersion,
         connectionName: connName || host,
