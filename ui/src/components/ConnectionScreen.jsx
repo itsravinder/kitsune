@@ -64,6 +64,8 @@ export function ConnectionScreen({ onConnected }) {
   const [host,      setHost]      = useState('');
   const [port,      setPort]      = useState(1433);
   const [dbName,    setDbName]    = useState('');
+  const [dbList,     setDbList]     = useState([]);
+  const [loadingDbs, setLoadingDbs] = useState(false);
   const [user,      setUser]      = useState('');
   const [pass,      setPass]      = useState('');
   const [trustCert, setTrustCert] = useState(true);
@@ -139,7 +141,23 @@ export function ConnectionScreen({ onConnected }) {
     const cs = getEffectiveConnStr();
     if (!cs) { setResult({ success: false, message: 'Connection string is empty.' }); return; }
     setTesting(true); setResult(null);
-    try { setResult(await callTestString(cs)); }
+    try {
+      const r = await callTestString(cs);
+      setResult(r);
+      // On successful connection, fetch real DB list from sys.databases
+      if (r.success && dbType === 'SqlServer') {
+        setLoadingDbs(true);
+        try {
+          const dbRes = await fetch(`${BACKEND}/api/databases`);
+          const dbData = await dbRes.json();
+          if (dbData.databases?.length) {
+            setDbList(dbData.databases.map(d => d.name));
+            // Auto-select first DB if none chosen
+            if (!dbName) setDbName(dbData.databases[0]?.name || '');
+          }
+        } catch { /* non-fatal */ } finally { setLoadingDbs(false); }
+      }
+    }
     catch (e) { setResult({ success: false, message: e.message }); }
     finally { setTesting(false); }
   };
@@ -147,6 +165,11 @@ export function ConnectionScreen({ onConnected }) {
   const handleConnect = async () => {
     const cs = getEffectiveConnStr();
     if (!cs) { setResult({ success: false, message: 'Connection string is empty.' }); return; }
+    // Block tempdb — it is a system database, never a valid target
+    if (dbName.toLowerCase() === 'tempdb') {
+      setResult({ success: false, message: 'tempdb is a system database. Select a user database.' });
+      return;
+    }
     setSaving(true); setResult(null);
     try {
       const test = await callTestString(cs);
@@ -386,9 +409,30 @@ export function ConnectionScreen({ onConnected }) {
                   </div>
 
                   <div style={{ marginBottom: 14 }}>
-                    <label style={lbl}>DATABASE NAME</label>
-                    <input style={inp} placeholder="KitsuneDB  (leave blank to connect to server)"
-                      value={dbName} onChange={e => { setDbName(e.target.value); setResult(null); }} />
+                    <label style={{ ...lbl, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span>DATABASE NAME</span>
+                      {loadingDbs && <span style={{ color: C.txt3, fontSize: 10 }}>⟳ Loading…</span>}
+                      {dbList.length > 0 && !loadingDbs && (
+                        <span style={{ color: C.green, fontSize: 10 }}>✓ {dbList.length} databases found</span>
+                      )}
+                    </label>
+                    {dbList.length > 0 ? (
+                      <select style={{ ...inp, cursor: 'pointer' }}
+                        value={dbName} onChange={e => { setDbName(e.target.value); setResult(null); }}>
+                        <option value="">— Select database —</option>
+                        {dbList.map(db => (
+                          <option key={db} value={db}>{db}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input style={inp} placeholder="KitsuneDB  (test connection first to see available DBs)"
+                        value={dbName} onChange={e => { setDbName(e.target.value); setResult(null); }} />
+                    )}
+                    {dbName.toLowerCase() === 'tempdb' && (
+                      <div style={{ marginTop: 5, fontSize: 10, color: C.red }}>
+                        ⚠ tempdb is a system database — select a user database instead
+                      </div>
+                    )}
                   </div>
 
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>

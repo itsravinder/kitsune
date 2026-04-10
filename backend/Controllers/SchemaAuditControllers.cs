@@ -184,6 +184,52 @@ namespace Kitsune.Backend.Controllers
         }
     }
 
+
+    // ── Database List Controller ──────────────────────────────
+    [ApiController]
+    [Route("api/databases")]
+    public class DatabaseListController : ControllerBase
+    {
+        private readonly IConfiguration _cfg;
+        private readonly ILogger<DatabaseListController> _log;
+
+        public DatabaseListController(IConfiguration cfg, ILogger<DatabaseListController> log)
+        { _cfg = cfg; _log = log; }
+
+        /// <summary>
+        /// GET /api/databases
+        /// Returns all user databases from sys.databases (excludes tempdb/master/model/msdb).
+        /// Used by UI to populate database picker — no hardcoded names.
+        /// </summary>
+        [HttpGet]
+        public async Task<IActionResult> List()
+        {
+            string cs = _cfg.GetConnectionString("SqlServer") ?? "";
+            const string sql = @"
+                SELECT name, database_id, state_desc
+                FROM sys.databases
+                WHERE name NOT IN ('master','tempdb','model','msdb')
+                  AND state_desc = 'ONLINE'
+                ORDER BY name;";
+            try
+            {
+                var dbs = new System.Collections.Generic.List<object>();
+                await using var conn = new Microsoft.Data.SqlClient.SqlConnection(cs);
+                await conn.OpenAsync();
+                await using var cmd  = new Microsoft.Data.SqlClient.SqlCommand(sql, conn);
+                await using var r    = await cmd.ExecuteReaderAsync();
+                while (await r.ReadAsync())
+                    dbs.Add(new { name = r["name"].ToString(), id = Convert.ToInt32(r["database_id"]) });
+                return Ok(new { databases = dbs, count = dbs.Count });
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Database list failed");
+                return Ok(new { databases = System.Array.Empty<object>(), count = 0, error = ex.Message });
+            }
+        }
+    }
+
     // ── DB Info Controller ─────────────────────────────────────
     [ApiController]
     [Route("api/db-info")]

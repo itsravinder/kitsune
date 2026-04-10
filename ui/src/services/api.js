@@ -100,6 +100,8 @@ export const mongoDatabases    = ()  => get(BACKEND, '/api/mongo/databases');
 export const mongoCollections  = db  => get(BACKEND, `/api/mongo/databases/${encodeURIComponent(db)}/collections`);
 
 // ── DB Info ──────────────────────────────────────────────
+export const getDatabases = () => get(BACKEND, '/api/databases');
+
 export const getDbInfo = () => get(BACKEND, '/api/db-info');
 
 // ── AI Service ────────────────────────────────────────────

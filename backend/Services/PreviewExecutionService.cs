@@ -1,11 +1,10 @@
 // ============================================================
-// KITSUNE – Preview Execution Service  (v3 – clean DB context)
+// KITSUNE – Preview Execution Service  (v4 – connection string DB)
 // DB context rules:
-//   1. NEVER use USE [db] statement — it overrides conn.ChangeDatabase()
-//      and hardcodes a DB name into the script text
-//   2. DB is set ONCE via conn.ChangeDatabase(requestedDb)
-//   3. requestedDb = request.DatabaseName (UI) or connection-string DB
-//   4. If requestedDb is empty/invalid → use whatever the conn opened on
+//   REMOVED: conn.ChangeDatabase() — fails silently on named instances
+//   REMOVED: USE [db] — overrides connection-level DB
+//   NEW:     Rebuild connection string with Database={requestedDb}
+//            so the connection opens on the correct DB from the start
 // ============================================================
 using System;
 using System.Collections.Generic;
@@ -27,18 +26,21 @@ namespace Kitsune.Backend.Services
 
     public class PreviewExecutionService : IPreviewExecutionService
     {
-        private readonly string _connectionString;
+        private readonly string _baseConnectionString;
         private readonly ILogger<PreviewExecutionService> _logger;
+
+        // These are database TYPE names, never actual DB names
+        private static readonly HashSet<string> InvalidDbNames =
+            new(StringComparer.OrdinalIgnoreCase)
+            { "SqlServer", "MongoDB", "MySQL", "PostgreSQL", "tempdb", "master", "model", "msdb" };
 
         private static readonly Regex DangerousPatterns = new(
             @"\b(DROP\s+TABLE|DROP\s+DATABASE|TRUNCATE|DROP\s+PROCEDURE|DROP\s+FUNCTION|DROP\s+VIEW)\b",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-        public PreviewExecutionService(
-            IConfiguration config,
-            ILogger<PreviewExecutionService> logger)
+        public PreviewExecutionService(IConfiguration config, ILogger<PreviewExecutionService> logger)
         {
-            _connectionString = config.GetConnectionString("SqlServer")
+            _baseConnectionString = config.GetConnectionString("SqlServer")
                 ?? throw new InvalidOperationException("SqlServer connection string missing.");
             _logger = logger;
         }
@@ -54,36 +56,25 @@ namespace Kitsune.Backend.Services
                 return response;
             }
 
+            // ── Resolve target DB ─────────────────────────────────────
+            string? requestedDb = ResolveDatabase(request.DatabaseName);
+
             var snippet = request.SqlQuery.Length > 120
                 ? request.SqlQuery[..120] + "…"
                 : request.SqlQuery;
 
-            // ── Resolve target DB ─────────────────────────────────────
-            // Priority order:
-            //   1. request.DatabaseName — set by UI selectedDatabase
-            //   2. Database= in the appsettings connection string
-            //   3. Leave connection on whatever it opened on (do not crash)
-            string? requestedDb = string.IsNullOrWhiteSpace(request.DatabaseName)
-                ? ExtractDatabaseFromConnStr(_connectionString)
-                : request.DatabaseName.Trim();
+            _logger.LogInformation("[PREVIEW] requestedDb={Db} | {Snippet}", requestedDb ?? "(conn-string default)", snippet);
 
-            // Reject obviously wrong values (e.g. "SqlServer" fell through from UI bug)
-            if (requestedDb != null && (
-                requestedDb.Equals("SqlServer",  StringComparison.OrdinalIgnoreCase) ||
-                requestedDb.Equals("MongoDB",    StringComparison.OrdinalIgnoreCase) ||
-                requestedDb.Equals("MySQL",      StringComparison.OrdinalIgnoreCase) ||
-                requestedDb.Equals("PostgreSQL", StringComparison.OrdinalIgnoreCase)))
-            {
-                _logger.LogWarning("[PREVIEW] Ignoring invalid databaseName '{Db}' — using connection string default", requestedDb);
-                requestedDb = ExtractDatabaseFromConnStr(_connectionString);
-            }
-
-            _logger.LogInformation("[PREVIEW] requestedDb={Db} | {Snippet}", requestedDb ?? "(default)", snippet);
+            // ── Build connection string with the correct Database= ────
+            // This is the ONLY way to reliably set DB on named SQL instances.
+            // conn.ChangeDatabase() can fail silently on named instances with
+            // Windows Auth, leaving the connection on master or tempdb.
+            string connectionString = BuildConnectionStringForDb(requestedDb);
 
             var sw = Stopwatch.StartNew();
             try
             {
-                await using var conn = new SqlConnection(_connectionString);
+                await using var conn = new SqlConnection(connectionString);
                 conn.InfoMessage += (_, e) =>
                 {
                     foreach (SqlError msg in e.Errors)
@@ -91,47 +82,30 @@ namespace Kitsune.Backend.Services
                 };
 
                 await conn.OpenAsync();
+
                 string connectedDb     = conn.Database;
                 string connectedServer = conn.DataSource;
 
-                // Switch DB via ADO.NET — this is the ONLY place DB is set
-                // NO USE statement is injected into the SQL script
-                if (!string.IsNullOrEmpty(requestedDb)
-                    && !connectedDb.Equals(requestedDb, StringComparison.OrdinalIgnoreCase))
-                {
-                    _logger.LogInformation("[PREVIEW] ChangeDatabase: {From} → {To}", connectedDb, requestedDb);
-                    try
-                    {
-                        conn.ChangeDatabase(requestedDb);
-                        connectedDb = conn.Database;
-                    }
-                    catch (Exception dbEx)
-                    {
-                        _logger.LogWarning("[PREVIEW] ChangeDatabase failed: {Err} — staying on {Db}", dbEx.Message, connectedDb);
-                        response.Messages.Add($"[WARN] Could not switch to '{requestedDb}': {dbEx.Message}. Using '{connectedDb}'.");
-                    }
-                }
-
-                _logger.LogInformation("[PREVIEW] Executing on {Server}/{Db}", connectedServer, connectedDb);
+                _logger.LogInformation("[PREVIEW] Connected: {Server}/{Db}", connectedServer, connectedDb);
                 response.Messages.Add($"[DB] {connectedServer} / {connectedDb}");
 
-                // Validate only if a DB was explicitly requested
+                // Validate we are on the right DB
                 if (!string.IsNullOrEmpty(requestedDb)
                     && !connectedDb.Equals(requestedDb, StringComparison.OrdinalIgnoreCase))
                 {
                     response.Success = false;
-                    response.Errors.Add($"Could not execute on '{requestedDb}' (connected to '{connectedDb}'). Check the database name.");
+                    response.Errors.Add(
+                        $"DB mismatch: requested '{requestedDb}' but connected to '{connectedDb}'. " +
+                        $"Ensure the database exists and the login has access.");
                     return response;
                 }
 
-                // Build script — NO USE statement, DB already set via ChangeDatabase
                 string safeScript = BuildSafeScript(request.SqlQuery, request.IsStoredProc);
                 _logger.LogDebug("[PREVIEW] Script:\n{Script}", safeScript);
 
                 await using var cmd = new SqlCommand(safeScript, conn)
                 {
-                    CommandTimeout = Math.Min(
-                        request.TimeoutSeconds > 0 ? request.TimeoutSeconds : 30, 120)
+                    CommandTimeout = Math.Min(request.TimeoutSeconds > 0 ? request.TimeoutSeconds : 30, 120)
                 };
 
                 if (request.Parameters is not null)
@@ -144,15 +118,10 @@ namespace Kitsune.Backend.Services
 
                 bool capturedCols = false;
                 int  setIdx       = 0;
-
                 do
                 {
                     setIdx++;
-                    if (reader.FieldCount == 0)
-                    {
-                        _logger.LogDebug("[PREVIEW] Result set {N}: 0 fields — skip", setIdx);
-                        continue;
-                    }
+                    if (reader.FieldCount == 0) continue;
 
                     if (!capturedCols)
                     {
@@ -161,7 +130,6 @@ namespace Kitsune.Backend.Services
                         capturedCols = true;
                     }
 
-                    int rowsRead = 0;
                     while (await reader.ReadAsync())
                     {
                         var row = new Dictionary<string, object?>();
@@ -171,15 +139,12 @@ namespace Kitsune.Backend.Services
                             row[reader.GetName(i)] = val is DBNull ? null : val;
                         }
                         response.ResultSet.Add(row);
-                        rowsRead++;
                         if (response.ResultSet.Count >= 500)
                         {
                             response.Messages.Add("PREVIEW TRUNCATED: first 500 rows shown.");
                             break;
                         }
                     }
-                    _logger.LogDebug("[PREVIEW] Set {N}: {Rows} rows", setIdx, rowsRead);
-
                 } while (await reader.NextResultAsync());
 
                 sw.Stop();
@@ -187,9 +152,8 @@ namespace Kitsune.Backend.Services
                 response.ExecutionMs = sw.Elapsed.TotalMilliseconds;
                 response.Success     = true;
 
-                _logger.LogInformation("[PREVIEW] Done | DB={Db} Rows={R} Cols={C} {Ms}ms",
-                    connectedDb, response.RowCount, response.Columns.Count,
-                    sw.Elapsed.TotalMilliseconds.ToString("F0"));
+                _logger.LogInformation("[PREVIEW] Done | DB={Db} Rows={R} {Ms}ms",
+                    connectedDb, response.RowCount, sw.Elapsed.TotalMilliseconds.ToString("F0"));
             }
             catch (SqlException ex)
             {
@@ -198,7 +162,7 @@ namespace Kitsune.Backend.Services
                 response.Success     = false;
                 foreach (SqlError err in ex.Errors)
                     response.Errors.Add($"[Line {err.LineNumber}] SQL {err.Number}: {err.Message}");
-                _logger.LogWarning(ex, "[PREVIEW] SQL error | {Snippet}", snippet);
+                _logger.LogWarning(ex, "[PREVIEW] SQL error");
             }
             catch (Exception ex)
             {
@@ -212,15 +176,43 @@ namespace Kitsune.Backend.Services
             return response;
         }
 
-        // ── Script builder — NO USE statement ────────────────────────
-        // The connection's DB is already set via ChangeDatabase() above.
-        // Injecting USE [db] would:
-        //   a) Hardcode a DB name into the script (breaks when user selects a different DB)
-        //   b) Override the ChangeDatabase() call silently
+        // ── Resolve the database name to use ─────────────────────────
+        private string? ResolveDatabase(string? requestedDb)
+        {
+            if (string.IsNullOrWhiteSpace(requestedDb))
+                return ExtractDatabaseFromConnStr(_baseConnectionString);
+
+            string db = requestedDb.Trim();
+
+            // Reject system/type names — these are never valid user database names
+            if (InvalidDbNames.Contains(db))
+            {
+                _logger.LogWarning("[PREVIEW] Rejected invalid databaseName '{Db}'", db);
+                return ExtractDatabaseFromConnStr(_baseConnectionString);
+            }
+
+            return db;
+        }
+
+        // ── Build connection string with the target database injected ─
+        // Uses SqlConnectionStringBuilder to safely replace Database=
+        // so the connection opens on the right DB without needing ChangeDatabase()
+        private string BuildConnectionStringForDb(string? dbName)
+        {
+            if (string.IsNullOrEmpty(dbName))
+                return _baseConnectionString;
+
+            var csb = new SqlConnectionStringBuilder(_baseConnectionString)
+            {
+                InitialCatalog = dbName   // replaces Database= in connection string
+            };
+            return csb.ConnectionString;
+        }
+
+        // ── Safe script — NO USE statement, NO ChangeDatabase ────────
         private static string BuildSafeScript(string sql, bool isStoredProc)
         {
             if (isStoredProc)
-            {
                 return $@"SET NOCOUNT ON;
 SET XACT_ABORT ON;
 BEGIN TRANSACTION;
@@ -234,7 +226,6 @@ BEGIN CATCH
     DECLARE @Line INT            = ERROR_LINE();
     RAISERROR('[KITSUNE] SP error at line %d: %s', 16, 1, @Line, @Msg);
 END CATCH;";
-            }
 
             return $@"SET NOCOUNT ON;
 SET XACT_ABORT ON;
@@ -258,9 +249,7 @@ END CATCH;";
 
         private static string? ExtractDatabaseFromConnStr(string cs)
         {
-            var m = Regex.Match(cs,
-                @"(?:Database|Initial\s+Catalog)\s*=\s*([^;]+)",
-                RegexOptions.IgnoreCase);
+            var m = Regex.Match(cs, @"(?:Database|Initial\s+Catalog)\s*=\s*([^;]+)", RegexOptions.IgnoreCase);
             return m.Success ? m.Groups[1].Value.Trim() : null;
         }
     }
