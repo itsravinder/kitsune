@@ -1,7 +1,8 @@
 # ============================================================
-# KITSUNE – AI Service v2 (FastAPI)
-# Endpoints: /generate /models /explain /risk
-#            /summarize-change /schema-context /health
+# KITSUNE – AI Service v3 (FastAPI)
+# Fixed: /api/generate (was /api/chat — 404 on older Ollama)
+#        messages[] → prompt string
+#        response["response"] (was response["message"]["content"])
 # ============================================================
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-app = FastAPI(title="KITSUNE AI Service", version="2.0.0")
+app = FastAPI(title="KITSUNE AI Service", version="3.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"],
                    allow_methods=["*"], allow_headers=["*"])
 
@@ -77,22 +78,49 @@ class SchemaContextRequest(BaseModel):
     model   : str = "auto"
 
 # ── Ollama helpers ────────────────────────────────────────────
+def messages_to_prompt(messages: list[dict]) -> str:
+    """Convert OpenAI-style messages array to a single prompt string.
+    Ollama /api/generate expects a flat prompt, not messages[].
+    """
+    parts = []
+    for m in messages:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        if role == "system":
+            parts.append(f"Instructions:\n{content}")
+        elif role == "user":
+            parts.append(f"User:\n{content}")
+        elif role == "assistant":
+            parts.append(f"Assistant:\n{content}")
+    parts.append("Assistant:")   # prompt Ollama to continue as assistant
+    return "\n\n".join(parts)
+
+
 async def call_ollama(model_key: str, messages: list[dict],
                        json_mode: bool = False) -> tuple[str, int]:
+    """Call Ollama /api/generate (NOT /api/chat — 404 on older Ollama)."""
     cfg = MODELS[model_key]
+    prompt = messages_to_prompt(messages)
+
     payload: dict[str, Any] = {
-        "model"   : cfg["ollama_name"],
-        "messages": messages,
-        "stream"  : False,
-        "options" : {"temperature": cfg["temperature"], "num_predict": cfg["max_tokens"]},
+        "model"  : cfg["ollama_name"],
+        "prompt" : prompt,           # /api/generate uses prompt, not messages
+        "stream" : False,
+        "options": {
+            "temperature": cfg["temperature"],
+            "num_predict": cfg["max_tokens"],
+        },
     }
     if json_mode:
         payload["format"] = "json"
+
     async with httpx.AsyncClient(timeout=180) as c:
-        r = await c.post(f"{OLLAMA_BASE}/api/chat", json=payload)
+        r = await c.post(f"{OLLAMA_BASE}/api/generate", json=payload)
         r.raise_for_status()
         d = r.json()
-    return d.get("message", {}).get("content", "").strip(), d.get("eval_count", 0)
+
+    # /api/generate returns {"response": "..."}, not {"message": {"content": "..."}}
+    return d.get("response", "").strip(), d.get("eval_count", 0)
 
 
 async def call_with_fallback(preferred: str, fallback: str,
@@ -149,14 +177,18 @@ async def generate(req: GenerateRequest):
 
     schema_block = f"\n\nDatabase schema:\n{req.schema}" if req.schema else ""
     if req.database_type.lower() == "mongodb":
-        system = ("You are an expert MongoDB query engineer. "
-                  "Return ONLY valid MongoDB aggregation pipeline JSON. "
-                  "No explanation, no markdown fences." + schema_block)
+        system = (
+            "You are an expert MongoDB query engineer. "
+            "Return ONLY valid MongoDB aggregation pipeline JSON. "
+            "No explanation, no markdown fences." + schema_block
+        )
     else:
-        system = ("You are an expert Microsoft SQL Server (T-SQL) query engineer. "
-                  "Return ONLY valid T-SQL. No explanation, no markdown fences, "
-                  "no commentary. Use best practices: proper joins, aliases, "
-                  "avoid SELECT *." + schema_block)
+        system = (
+            "You are an expert Microsoft SQL Server (T-SQL) query engineer. "
+            "Return ONLY valid T-SQL. No explanation, no markdown fences, "
+            "no commentary. Use best practices: proper joins, aliases, "
+            "avoid SELECT *." + schema_block
+        )
 
     messages = [
         {"role": "system", "content": system},
@@ -185,13 +217,17 @@ async def list_models():
             async with httpx.AsyncClient(timeout=4) as c:
                 r = await c.get(f"{OLLAMA_BASE}/api/tags")
                 if r.status_code == 200:
-                    available = any(m.get("name","").startswith(cfg["ollama_name"].split(":")[0])
-                                    for m in r.json().get("models",[]))
+                    available = any(
+                        m.get("name", "").startswith(cfg["ollama_name"].split(":")[0])
+                        for m in r.json().get("models", [])
+                    )
         except Exception:
             pass
-        results.append({"id": key, "display_name": cfg["display_name"],
-                         "type": cfg["type"], "best_for": cfg["best_for"],
-                         "available": available})
+        results.append({
+            "id": key, "display_name": cfg["display_name"],
+            "type": cfg["type"], "best_for": cfg["best_for"],
+            "available": available,
+        })
     return results
 
 
@@ -252,7 +288,7 @@ async def summarize_change(req: ChangeSummaryRequest):
     try:
         return json.loads(strip_fences(raw))
     except Exception:
-        return {"summary": "Change summary unavailable. Review diff manually.",
+        return {"summary": "Change summary unavailable.",
                 "key_changes": [], "risk_level": "UNKNOWN", "breaking_changes": []}
 
 
@@ -279,7 +315,10 @@ async def health():
                 models_avail = [m["name"] for m in r.json().get("models", [])]
     except Exception:
         pass
-    return {"status": "ok", "version": "2.0.0",
-            "ollama": "connected" if ollama_ok else "unreachable",
-            "models_available": models_avail,
-            "registered_models": list(MODELS.keys())}
+    return {
+        "status": "ok", "version": "3.0.0",
+        "ollama": "connected" if ollama_ok else "unreachable",
+        "models_available": models_avail,
+        "registered_models": list(MODELS.keys()),
+        "ollama_endpoint": f"{OLLAMA_BASE}/api/generate",
+    }

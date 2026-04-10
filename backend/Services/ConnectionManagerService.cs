@@ -337,41 +337,53 @@ namespace Kitsune.Backend.Services
                 var results = new List<SqlInstanceInfo>();
                 try
                 {
-                    // SqlDataSourceEnumerator broadcasts UDP to find visible instances
-                    var enumerator = System.Data.Sql.SqlDataSourceEnumerator.Instance;
-                    var table      = enumerator.GetDataSources();
+                    // Read all SQL Server instances from the Windows registry.
+                    // Works for SQL Server 2008+ on any .NET version (no SqlDataSourceEnumerator needed).
+                    // HKLM\SOFTWARE\Microsoft\Microsoft SQL Server\InstalledInstances
+                    // lists every local instance by name ("MSSQLSERVER" = default, others = named).
+                    var regPath = @"SOFTWARE\Microsoft\Microsoft SQL Server";
+                    using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(regPath);
+                    var installedKey = key?.OpenSubKey(@"Instance Names\SQL");
 
-                    foreach (System.Data.DataRow row in table.Rows)
+                    if (installedKey != null)
                     {
-                        string server   = row["ServerName"]?.ToString()  ?? "";
-                        string instance = row["InstanceName"]?.ToString() ?? "";
-                        string version  = row["Version"]?.ToString()      ?? "";
-                        bool isDefault  = string.IsNullOrEmpty(instance);
-
-                        // Build the connection host string
-                        string fullName = isDefault ? server : $"{server}\\{instance}";
-
-                        // Map remote server names to localhost if they match this machine
-                        string machineName = System.Environment.MachineName;
-                        if (server.Equals(machineName, StringComparison.OrdinalIgnoreCase))
-                            fullName = isDefault ? "localhost" : $"localhost\\{instance}";
-
-                        results.Add(new SqlInstanceInfo
+                        foreach (var instanceName in installedKey.GetValueNames())
                         {
-                            ServerName   = server,
-                            InstanceName = instance,
-                            FullName     = fullName,
-                            Version      = version,
-                            IsDefault    = isDefault,
-                        });
+                            bool isDefault = instanceName.Equals("MSSQLSERVER", StringComparison.OrdinalIgnoreCase);
+                            string fullName = isDefault
+                                ? "localhost"
+                                : $"localhost\\{instanceName}";
+
+                            // Try to read the version from registry
+                            string version = "";
+                            try
+                            {
+                                var serviceKey = installedKey.GetValue(instanceName)?.ToString();
+                                if (serviceKey != null)
+                                {
+                                    var verKey = key?.OpenSubKey(@$"{serviceKey}\MSSQLServer\CurrentVersion");
+                                    version = verKey?.GetValue("CurrentVersion")?.ToString() ?? "";
+                                }
+                            }
+                            catch { /* version is optional */ }
+
+                            results.Add(new SqlInstanceInfo
+                            {
+                                ServerName   = "localhost",
+                                InstanceName = isDefault ? "" : instanceName,
+                                FullName     = fullName,
+                                Version      = version,
+                                IsDefault    = isDefault,
+                            });
+                        }
                     }
                 }
                 catch (Exception ex)
                 {
-                    _log.LogWarning(ex, "SQL instance discovery failed (SQL Browser may be stopped)");
+                    _log.LogWarning(ex, "Registry-based SQL instance discovery failed");
                 }
 
-                // Always include localhost as fallback if no instances found
+                // Always include a localhost fallback if nothing found
                 if (results.Count == 0)
                 {
                     results.Add(new SqlInstanceInfo
@@ -379,7 +391,7 @@ namespace Kitsune.Backend.Services
                         ServerName   = "localhost",
                         InstanceName = "",
                         FullName     = "localhost",
-                        Version      = "Unknown",
+                        Version      = "",
                         IsDefault    = true,
                     });
                 }

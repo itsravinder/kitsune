@@ -99,6 +99,9 @@ export const mongoQuery        = b  => post(BACKEND, '/api/mongo/query',        
 export const mongoDatabases    = ()  => get(BACKEND, '/api/mongo/databases');
 export const mongoCollections  = db  => get(BACKEND, `/api/mongo/databases/${encodeURIComponent(db)}/collections`);
 
+// ── DB Info ──────────────────────────────────────────────
+export const getDbInfo = () => get(BACKEND, '/api/db-info');
+
 // ── AI Service ────────────────────────────────────────────────
 export const generateQuery     = b  => post(AI_SVC,  '/generate',                     b);
 export const listModels        = ()  => get(AI_SVC,  '/models');          // AI service models

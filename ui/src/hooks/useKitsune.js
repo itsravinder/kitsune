@@ -147,10 +147,39 @@ export function useKitsune() {
   });
 
   const handlePreview = handle('preview', async () => {
+    // Debug: log what we're sending
+    console.log('[KITSUNE] Preview request:', { sqlQuery, isStoredProc: false });
+
     const res = await api.previewQuery({ sqlQuery, isStoredProc: false, timeoutSeconds: 30 });
-    setPreview(res);
+
+    // Debug: log raw response
+    console.log('[KITSUNE] Preview response:', {
+      success:    res.success,
+      rowCount:   res.rowCount,
+      columns:    res.columns,
+      resultRows: res.resultSet?.length,
+      errors:     res.errors,
+      messages:   res.messages,
+      executionMs:res.executionMs,
+    });
+
+    // Normalise: handle both camelCase and PascalCase from server
+    const normalised = {
+      ...res,
+      success:   res.success   ?? false,
+      rowCount:  res.rowCount  ?? res.RowCount  ?? 0,
+      columns:   res.columns   ?? res.Columns   ?? [],
+      resultSet: res.resultSet ?? res.ResultSet ?? [],
+      errors:    res.errors    ?? res.Errors    ?? [],
+      messages:  res.messages  ?? res.Messages  ?? [],
+    };
+
+    setPreview(normalised);
     setActiveTab('results');
-    notify(`Preview: ${res.rowCount} rows in ${fmtMs(res.executionMs)}`, res.success ? 'success' : 'error');
+    notify(
+      `Preview: ${normalised.rowCount} rows in ${fmtMs(res.executionMs)}`,
+      normalised.success ? 'success' : 'error'
+    );
   });
 
   const handleBackup = handle('backup', async () => {

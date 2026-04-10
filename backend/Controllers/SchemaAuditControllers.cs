@@ -2,6 +2,7 @@
 // KITSUNE – Schema & Audit Controllers
 // ============================================================
 using System;
+using Microsoft.Data.SqlClient;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
@@ -81,4 +82,51 @@ namespace Kitsune.Backend.Controllers
             return Ok(new { total = logs.Count, logs });
         }
     }
+
+    // ── DB Info Controller ─────────────────────────────────────
+    [ApiController]
+    [Route("api/db-info")]
+    public class DbInfoController : ControllerBase
+    {
+        private readonly IConfiguration _cfg;
+        private readonly ILogger<DbInfoController> _log;
+
+        public DbInfoController(IConfiguration cfg, ILogger<DbInfoController> log)
+        {
+            _cfg = cfg; _log = log;
+        }
+
+        /// <summary>GET /api/db-info — returns actual server + database name</summary>
+        [HttpGet]
+        public async Task<IActionResult> GetDbInfo()
+        {
+            string cs = _cfg.GetConnectionString("SqlServer") ?? "";
+            try
+            {
+                await using var conn = new Microsoft.Data.SqlClient.SqlConnection(cs);
+                await conn.OpenAsync();
+                await using var cmd = new Microsoft.Data.SqlClient.SqlCommand(
+                    "SELECT @@SERVERNAME AS srv, DB_NAME() AS db, @@VERSION AS ver;", conn);
+                await using var r = await cmd.ExecuteReaderAsync();
+                if (await r.ReadAsync())
+                {
+                    return Ok(new
+                    {
+                        serverName   = r["srv"]?.ToString() ?? conn.DataSource,
+                        databaseName = r["db"]?.ToString()  ?? conn.Database,
+                        serverVersion= r["ver"]?.ToString()?.Split('\n')[0]?.Trim() ?? "",
+                        dataSource   = conn.DataSource,
+                        connected    = true,
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "DB info query failed");
+                return Ok(new { serverName = "unknown", databaseName = "unknown", connected = false, error = ex.Message });
+            }
+            return Ok(new { serverName = "unknown", databaseName = "unknown", connected = false });
+        }
+    }
+
 }

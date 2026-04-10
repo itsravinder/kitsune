@@ -141,6 +141,15 @@ export function SchemaExplorer({ connectionId, dbType = 'SqlServer', onObjectSel
   const [search,   setSearch]   = useState('');
   const [expanded, setExpanded] = useState({});
   const [activeId, setActiveId] = useState('');
+  const [dbInfo,   setDbInfo]   = useState(null);
+
+  // Fetch actual DB/server info from backend
+  useEffect(() => {
+    fetch(`${BACKEND}/api/db-info`)
+      .then(r => r.json())
+      .then(d => setDbInfo(d))
+      .catch(() => {});
+  }, [connectionId]);
 
   // Only use config for connected DB type
   const config = DB_TREE_CONFIG[dbType] || DB_TREE_CONFIG.SqlServer;
@@ -225,6 +234,19 @@ export function SchemaExplorer({ connectionId, dbType = 'SqlServer', onObjectSel
           {loading ? '⟳' : '↻'}
         </button>
       </div>
+
+      {/* DB Info Banner */}
+      {dbInfo?.connected && (
+        <div style={{
+          padding: '4px 10px', background: '#030a14',
+          borderBottom: `1px solid ${T.border}`,
+          display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, flexShrink: 0,
+        }}>
+          <span style={{ color: '#4a8eff', fontWeight: 700 }}>{dbInfo.databaseName}</span>
+          <span style={{ color: '#334a60' }}>@</span>
+          <span style={{ color: '#6b90b0' }}>{dbInfo.serverName}</span>
+        </div>
+      )}
 
       {/* Search – ACTUALLY WORKS */}
       <div style={{ padding: '5px 8px', borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>
