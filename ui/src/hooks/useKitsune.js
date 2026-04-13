@@ -142,38 +142,50 @@ export function useKitsune() {
       database_name:    selectedDatabase,
     });
 
-    // Use .query or .generated_query (both are set)
-    setSqlQuery(res.query || res.generated_query || '');
+    // Use .query or .generated_query (both are set by v5 backend)
+    const sqlOut = res.query || res.generated_query || '';
+    setSqlQuery(sqlOut);
 
-    // Populate schema state so UI tabs (Schema, Deepmap, Explain) have data
+    // Populate state for all UI tabs
     setSchema(prev => ({
       ...prev,
-      // AI generate response fields → UI tabs
-      aiQuery:    res.query            || res.generated_query || '',
-      explanation:res.explanation      || '',
-      schemaUsed: res.schema           || res.schema_used     || '',
-      deepmap:    res.deepmap          || '',
-      tablesUsed: res.tables_used      || [],
+      aiQuery:     sqlOut,
+      explanation: res.explanation  || '',
+      schemaUsed:  res.schema       || res.schema_used || '',
+      deepmap:     res.deepmap      || '',
+      tablesUsed:  res.tables_used  || [],
     }));
 
-    // Store explanation separately for the Explain tab
     if (res.explanation) setExplanation(res.explanation);
 
+    // Build genMeta confirmation line (shown below the editor)
+    const confLabel  = res.confidence ? ` · ${res.confidence.toUpperCase()}` : '';
     const tablesInfo = res.tables_used?.length
-      ? ` · Tables: ${res.tables_used.join(', ')}`
+      ? ` · Tables: ${res.tables_used.slice(0,4).join(', ')}${res.tables_used.length > 4 ? '…' : ''}`
       : '';
+    const fbNote = res.fallback_used ? ' · (fallback)' : '';
     setGenMeta(
-      `${res.display_name || 'AI'} · ${((res.confidence_score || 0) * 100).toFixed(0)}% · ` +
+      `${res.display_name || 'AI'}${confLabel} · ` +
       `${fmtMs(res.execution_ms || 0)} · ${res.tokens_used || 0} tokens` +
-      `${res.fallback_used ? ' · fallback' : ''}${tablesInfo}`
+      `${fbNote}${tablesInfo}`
     );
 
-    notify(
-      res.tables_used?.length
-        ? `Generated using ${res.tables_used.length} table(s): ${res.tables_used.slice(0,3).join(', ')}`
-        : 'Query generated',
-      'success'
-    );
+    // Show generation_log entries as the main notification (confirmation logging)
+    const logSummary = res.generation_log?.length
+      ? res.generation_log[res.generation_log.length - 1]   // last log entry
+      : null;
+    const notifyMsg = res.tables_used?.length
+      ? `Schema sent to LLM: ${res.tables_used.slice(0,3).join(', ')}${res.tables_used.length > 3 ? '…' : ''}`
+      : 'Query generated';
+
+    notify(logSummary || notifyMsg, res.confidence_score > 0 ? 'success' : 'error');
+
+    // Log all confirmation entries to console for debugging
+    if (res.generation_log?.length) {
+      console.group('[KITSUNE] Generation Log');
+      res.generation_log.forEach(l => console.log(l));
+      console.groupEnd();
+    }
   });
 
   const handleValidate = handle('validate', async () => {

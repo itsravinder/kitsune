@@ -147,6 +147,28 @@ export default function KitsuneApp() {
         return <DiffTab diffResult={k.diffResult} />;
 
       case 'depmap':
+        // Show AI-generated dependency tree if available, else standard dependency map
+        if (k.schema?.deepmap) {
+          return (
+            <div style={{ padding: 14 }}>
+              <div style={{ fontSize: 10, color: T.txt3, fontWeight: 700, letterSpacing: '.06em', marginBottom: 10 }}>
+                AI DEPENDENCY MAP
+              </div>
+              <pre style={{
+                background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 7,
+                padding: '12px 16px', fontSize: 11, color: T.txt, lineHeight: 1.7,
+                whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: "'JetBrains Mono',monospace",
+              }}>
+                {k.schema.deepmap}
+              </pre>
+              {k.schema.tablesUsed?.length > 0 && (
+                <div style={{ marginTop: 10, fontSize: 10, color: T.txt3 }}>
+                  Tables: {k.schema.tablesUsed.join(' → ')}
+                </div>
+              )}
+            </div>
+          );
+        }
         return <DependencyMap objectName={k.objectName} objectType={k.objectType} />;
 
       case 'risk':
@@ -156,6 +178,23 @@ export default function KitsuneApp() {
         return <ExplainTab explanation={k.explanation} />;
 
       case 'schema':
+        // Show AI schema summary text when no full DB schema is loaded
+        if (k.schema?.schemaUsed && !k.schema?.tables?.length) {
+          return (
+            <div style={{ padding: 14 }}>
+              <div style={{ fontSize: 10, color: T.txt3, fontWeight: 700, letterSpacing: '.06em', marginBottom: 10 }}>
+                SCHEMA USED IN QUERY
+              </div>
+              <pre style={{
+                background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 7,
+                padding: '12px 16px', fontSize: 11, color: T.txt, lineHeight: 1.7,
+                whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: "'JetBrains Mono',monospace",
+              }}>
+                {k.schema.schemaUsed}
+              </pre>
+            </div>
+          );
+        }
         return <SchemaTab schema={k.schema} />;
 
       case 'optimizer':
