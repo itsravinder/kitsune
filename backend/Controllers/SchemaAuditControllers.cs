@@ -20,24 +20,42 @@ namespace Kitsune.Backend.Controllers
         private readonly ILogger<SchemaController> _log;
         private readonly IConfiguration           _cfg;
 
+        private readonly ISchemaFormatterService _formatter;
+
         public SchemaController(
             ISchemaExtractionService schema,
             IAuditLogService audit,
             ILogger<SchemaController> log,
-            IConfiguration cfg)
+            IConfiguration cfg,
+            ISchemaFormatterService formatter)
         {
             _schema = schema; _audit = audit; _log = log; _cfg = cfg;
+            _formatter = formatter;
         }
 
-        /// <summary>GET /api/schema/sqlserver?db=MyDatabase</summary>
+        /// <summary>
+        /// GET /api/schema/sqlserver?db=MyDatabase
+        /// Returns UI-formatted schema (camelCase, tables[].name/.schema/.columns etc.)
+        /// This is the data shape SchemaTab in Panels.jsx reads directly.
+        /// </summary>
         [HttpGet("sqlserver")]
         public async Task<IActionResult> ExtractSqlServer([FromQuery] string? db = null)
         {
             var t0 = DateTime.UtcNow;
-            var result = await _schema.ExtractSqlServerSchemaAsync(db);
-            await _audit.LogAsync(AuditAction.SchemaExtract, db ?? "default", "DATABASE",
-                "SUCCESS", new { db }, null, durationMs: (DateTime.UtcNow - t0).TotalMilliseconds, database: db ?? "");
-            return Ok(result);
+            try
+            {
+                var raw    = await _schema.ExtractSqlServerSchemaAsync(db);
+                var ui     = _formatter.ToUiFormat(raw);
+                await _audit.LogAsync(AuditAction.SchemaExtract, db ?? "default", "DATABASE",
+                    "SUCCESS", new { db, tableCount = raw.Tables.Count }, null,
+                    durationMs: (DateTime.UtcNow - t0).TotalMilliseconds, database: db ?? "");
+                return Ok(ui);
+            }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "[SCHEMA] ExtractSqlServer failed for db={Db}", db);
+                return StatusCode(500, new { error = ex.Message });
+            }
         }
 
         /// <summary>GET /api/schema/mongodb/{database}</summary>

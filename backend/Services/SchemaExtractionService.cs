@@ -38,13 +38,44 @@ namespace Kitsune.Backend.Services
         public async Task<DatabaseSchema> ExtractSqlServerSchemaAsync(string? databaseName = null)
         {
             var schema = new DatabaseSchema { DatabaseType = "SqlServer" };
-            await using var conn = new SqlConnection(_sqlConnString);
-            await conn.OpenAsync();
-            schema.DatabaseName = databaseName ?? conn.Database;
-            schema.Tables       = await ExtractTablesAsync(conn);
-            schema.Views        = await ExtractViewsAsync(conn);
-            schema.Procedures   = await ExtractProceduresAsync(conn);
-            schema.Functions    = await ExtractFunctionsAsync(conn);
+
+            // Build connection string with target database baked in.
+            // This is required for named instances — ChangeDatabase() can
+            // fail silently with Windows Auth on named instances.
+            string cs = _sqlConnString;
+            if (!string.IsNullOrWhiteSpace(databaseName))
+            {
+                var csb = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(cs)
+                {
+                    InitialCatalog = databaseName
+                };
+                cs = csb.ConnectionString;
+            }
+
+            await using var conn = new SqlConnection(cs);
+            try { await conn.OpenAsync(); }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "[SCHEMA] Failed to open connection for DB={Db}", databaseName);
+                schema.DatabaseName = databaseName ?? "";
+                return schema; // return partial schema rather than crashing
+            }
+
+            schema.DatabaseName = conn.Database;
+
+            try { schema.Tables     = await ExtractTablesAsync(conn); }
+            catch (Exception ex) { _log.LogWarning(ex, "[SCHEMA] Tables extraction failed"); }
+
+            try { schema.Views      = await ExtractViewsAsync(conn); }
+            catch (Exception ex) { _log.LogWarning(ex, "[SCHEMA] Views extraction failed"); }
+
+            try { schema.Procedures = await ExtractProceduresAsync(conn); }
+            catch (Exception ex) { _log.LogWarning(ex, "[SCHEMA] Procedures extraction failed"); }
+
+            try { schema.Functions  = await ExtractFunctionsAsync(conn); }
+            catch (Exception ex) { _log.LogWarning(ex, "[SCHEMA] Functions extraction failed"); }
+
+            schema.DDLSummary = (await GenerateDDLSummaryAsync(schema));
             return schema;
         }
 
@@ -76,10 +107,29 @@ namespace Kitsune.Backend.Services
 
         private static async Task<List<ColumnSchema>> ExtractColumnsAsync(SqlConnection conn, string schema, string table)
         {
+            // Single query: columns + PK membership via INFORMATION_SCHEMA joins
             const string sql = @"
-                SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE, COLUMN_DEFAULT,
-                    COLUMNPROPERTY(OBJECT_ID(TABLE_SCHEMA+'.'+TABLE_NAME), COLUMN_NAME, 'IsIdentity') AS IsIdentity
-                FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=@S AND TABLE_NAME=@T ORDER BY ORDINAL_POSITION;";
+                SELECT
+                    c.COLUMN_NAME,
+                    c.DATA_TYPE,
+                    c.CHARACTER_MAXIMUM_LENGTH,
+                    c.IS_NULLABLE,
+                    c.COLUMN_DEFAULT,
+                    COLUMNPROPERTY(OBJECT_ID(c.TABLE_SCHEMA+'.'+c.TABLE_NAME), c.COLUMN_NAME, 'IsIdentity') AS IsIdentity,
+                    CASE WHEN kcu.COLUMN_NAME IS NOT NULL THEN 1 ELSE 0 END AS IsPrimaryKey
+                FROM INFORMATION_SCHEMA.COLUMNS c
+                LEFT JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
+                    ON  kcu.TABLE_SCHEMA  = c.TABLE_SCHEMA
+                    AND kcu.TABLE_NAME    = c.TABLE_NAME
+                    AND kcu.COLUMN_NAME   = c.COLUMN_NAME
+                    AND EXISTS (
+                        SELECT 1 FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+                        WHERE tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+                          AND tc.TABLE_SCHEMA    = kcu.TABLE_SCHEMA
+                          AND tc.TABLE_NAME      = kcu.TABLE_NAME
+                          AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY')
+                WHERE c.TABLE_SCHEMA = @S AND c.TABLE_NAME = @T
+                ORDER BY c.ORDINAL_POSITION;";
             var cols = new List<ColumnSchema>();
             await using var cmd = new SqlCommand(sql, conn);
             cmd.Parameters.AddWithValue("@S", schema);
@@ -88,12 +138,13 @@ namespace Kitsune.Backend.Services
             while (await r.ReadAsync())
                 cols.Add(new ColumnSchema
                 {
-                    ColumnName  = r["COLUMN_NAME"].ToString()!,
-                    DataType    = r["DATA_TYPE"].ToString()!,
-                    MaxLength   = r["CHARACTER_MAXIMUM_LENGTH"] == DBNull.Value ? null : Convert.ToInt32(r["CHARACTER_MAXIMUM_LENGTH"]),
-                    IsNullable  = r["IS_NULLABLE"].ToString() == "YES",
-                    DefaultValue= r["COLUMN_DEFAULT"]?.ToString(),
-                    IsIdentity  = Convert.ToBoolean(r["IsIdentity"]),
+                    ColumnName   = r["COLUMN_NAME"].ToString()!,
+                    DataType     = r["DATA_TYPE"].ToString()!,
+                    MaxLength    = r["CHARACTER_MAXIMUM_LENGTH"] == DBNull.Value ? null : Convert.ToInt32(r["CHARACTER_MAXIMUM_LENGTH"]),
+                    IsNullable   = r["IS_NULLABLE"].ToString() == "YES",
+                    DefaultValue = r["COLUMN_DEFAULT"]?.ToString(),
+                    IsIdentity   = Convert.ToBoolean(r["IsIdentity"]),
+                    IsPrimaryKey = Convert.ToInt32(r["IsPrimaryKey"]) == 1,
                 });
             return cols;
         }

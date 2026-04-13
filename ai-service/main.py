@@ -568,27 +568,34 @@ async def generate(req: GenerateRequest):
             f"  {t.get('fullName', t.get('tableName',''))}" for t in schema_data
         ) if schema_data else "  (auto-detect from schema)"
 
-        system_prompt = (
-            "You are a Microsoft SQL Server T-SQL expert.\n"
-            "Write ONLY the SQL query. Do NOT write explanations, comments, or JSON.\n"
-            "Rules:\n"
-            "  - Use ONLY the tables and columns listed in the schema below\n"
-            "  - Use dbo.TableName prefix\n"
-            "  - Use table aliases\n"
-            "  - Add TOP 1000 for SELECT\n"
-            "  - Use FK joins shown\n"
-            f"  - Tables available:\n{table_list_str}"
-            + schema_block + join_block
-            + "\n\nOutput: SQL query only. No explanation. No JSON. No markdown."
-        )
+        # SQLCoder format: the model is trained to complete from "### SQL Query:"
+        # Do NOT wrap in system/user roles — use the flat prompt format directly.
+        # This is what prevents gpt-oss/sqlcoder from returning their own reasoning.
+        fk_section = ""
+        if fk_lines:
+            fk_section = "\n-- Foreign Key Relationships:\n" + "\n".join(
+                f"-- {j}" for j in fk_lines
+            )
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": (
-            f"Database: {req.database_name or 'target'}\n"
-            f"Request: {req.natural_language}"
-        )},
-    ]
+        system_prompt = (
+            "### Instructions:\n"
+            "Your task is to convert a question into a SQL query, given a MS SQL Server database schema.\n"
+            "Adhere to these rules:\n"
+            "- Use ONLY tables and columns defined in the schema below.\n"
+            "- Do NOT guess column or table names.\n"
+            "- Use dbo.TableName prefix for all table references.\n"
+            "- For JOINs, use the foreign key relationships shown.\n"
+            "- Add TOP 1000 to SELECT unless specific row count requested.\n"
+            "- Output ONLY the SQL query. No explanation. No JSON. No markdown.\n"
+            "\n### Database Schema:\n"
+            f"-- Database: {req.database_name or 'target'}\n"
+            + (schema_text if schema_text else "-- (schema not available)")
+            + fk_section
+            + f"\n\n### Question:\n{req.natural_language}\n"
+            + "\n### SQL Query:\n"
+        )
+        # For SQLCoder, send as a single flat prompt (no role structure)
+        messages = [{"role": "user", "content": system_prompt}]
 
     # ── 5. Call LLM with retry + fallback ─────────────────────
     raw = ""

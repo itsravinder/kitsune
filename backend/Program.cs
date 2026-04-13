@@ -48,6 +48,9 @@ builder.Services.AddScoped<ISqlScriptRunnerService,      SqlScriptRunnerService>
 builder.Services.AddScoped<IDataExportService,           DataExportService>();
 builder.Services.AddScoped<INotificationService,         NotificationService>();
 builder.Services.AddScoped<IModelService,                ModelService>();
+builder.Services.AddScoped<ISchemaFormatterService,     SchemaFormatterService>();
+builder.Services.AddScoped<IPromptBuilderService,       PromptBuilderService>();
+builder.Services.AddScoped<IOllamaService,              OllamaService>();
 builder.Services.AddScoped<IQueryIntentService,          QueryIntentService>();
 
 builder.Services.AddHttpClient();
