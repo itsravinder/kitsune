@@ -513,68 +513,84 @@ async def generate(req: GenerateRequest):
         schema_text = req.schema
         log.append("Using caller-supplied schema")
 
-    # ── 3. Build prompt — request STRICT JSON output ──────────
-    schema_block = (
-        f"\n\n=== DATABASE SCHEMA ===\n{schema_text}\n=== END SCHEMA ==="
-        if schema_text else ""
-    )
-    join_info = ""
+    # ── 3. Determine if model is local or cloud ───────────────
+    # Local models (SQLCoder, gpt-oss, llama, etc.) cannot reliably
+    # produce structured JSON. Use a plain SQL prompt for them, then
+    # build explanation/schema/deepmap ourselves from the schema data.
+    # Cloud models (qwen3-coder:*-cloud) can follow JSON instructions.
+    _, _, model_type = resolve_model_name(model_key)
+    use_json_prompt = (model_type == "cloud" or "cloud" in model_key.lower())
+
+    # ── 4. Build FK join lines (used in both prompt styles) ───
+    fk_lines: list[str] = []
     if schema_data:
-        fk_lines = []
-        seen = set()
+        seen_fk: set[str] = set()
         for t in schema_data:
             for fk in t.get("foreignKeys", []):
                 j = fk.get("join", "")
-                if j and j not in seen:
-                    seen.add(j)
-                    fk_lines.append(f"  {j}")
-        if fk_lines:
-            join_info = "\n\n=== FOREIGN KEY JOINS ===\n" + "\n".join(fk_lines) + "\n=== END JOINS ==="
+                if j and j not in seen_fk:
+                    seen_fk.add(j)
+                    fk_lines.append(j)
+
+    schema_block = (
+        f"\n\nDATABASE SCHEMA:\n{schema_text}"
+        if schema_text else ""
+    )
+    join_block = (
+        "\n\nFOREIGN KEY JOINS (use these exactly):\n" + "\n".join(f"  {j}" for j in fk_lines)
+        if fk_lines else ""
+    )
 
     if req.database_type.lower() == "mongodb":
+        # MongoDB always uses JSON prompt
         system_prompt = (
-            "You are an expert MongoDB query engineer.\n"
-            "Return ONLY valid JSON with these exact keys:\n"
-            '{"query": "...", "explanation": "...", "schema": "...", '
-            '"deepmap": "...", "tables_used": [], "confidence": "high/medium/low"}\n'
-            "query = valid MongoDB aggregation pipeline JSON string\n"
-            "No markdown, no extra text."
+            "You are an expert MongoDB query engineer. "
+            "Return ONLY a valid MongoDB aggregation pipeline JSON array. "
+            "No explanation, no markdown."
         )
         if schema_text:
             system_prompt += f"\n\nSchema:\n{schema_text}"
-    else:
+        use_json_prompt = False  # MongoDB: just return the pipeline
+
+    elif use_json_prompt:
+        # CLOUD model — can handle structured JSON output
         system_prompt = (
             "You are an expert Microsoft SQL Server (T-SQL) engineer.\n"
-            "Generate a valid T-SQL query for the user request.\n\n"
-            "STRICT RULES:\n"
-            "- Use ONLY tables and columns from the schema provided\n"
-            "- Do NOT guess any column or table names\n"
-            "- Use FK joins shown — do NOT invent joins\n"
-            "- Always prefix: dbo.TableName\n"
-            "- Use aliases (c for Customers, o for Orders etc)\n"
-            "- Add TOP 1000 unless user specifies a limit\n"
-            "- ORDER BY primary key or most relevant column\n\n"
-            "Return ONLY valid JSON with these exact keys (no markdown, no extra text):\n"
-            '{"query": "SELECT ...", '
-            '"explanation": "Plain English: what this query does at business level", '
-            '"schema": "Which tables + columns are used and why", '
-            '"deepmap": "Step 1: Base table\\nStep 2: JOIN...\\nStep 3: Filter\\nStep 4: Result", '
-            '"tables_used": ["Table1","Table2"], '
-            '"confidence": "high"}'
-            + schema_block
-            + join_info
+            "Generate a T-SQL query and return ONLY valid JSON (no markdown, no extra text):\n"
+            '{"query":"SELECT...","explanation":"plain English","schema":"tables+columns used","deepmap":"Step 1: base\nStep 2: join\nStep 3: filter","tables_used":["T1"],"confidence":"high"}'
+            + schema_block + join_block
+        )
+    else:
+        # LOCAL model — ask ONLY for SQL, nothing else
+        # Local models (SQLCoder, gpt-oss, llama) fail when asked for JSON.
+        # We build explanation/schema/deepmap ourselves from the schema data.
+        table_list_str = "\n".join(
+            f"  {t.get('fullName', t.get('tableName',''))}" for t in schema_data
+        ) if schema_data else "  (auto-detect from schema)"
+
+        system_prompt = (
+            "You are a Microsoft SQL Server T-SQL expert.\n"
+            "Write ONLY the SQL query. Do NOT write explanations, comments, or JSON.\n"
+            "Rules:\n"
+            "  - Use ONLY the tables and columns listed in the schema below\n"
+            "  - Use dbo.TableName prefix\n"
+            "  - Use table aliases\n"
+            "  - Add TOP 1000 for SELECT\n"
+            "  - Use FK joins shown\n"
+            f"  - Tables available:\n{table_list_str}"
+            + schema_block + join_block
+            + "\n\nOutput: SQL query only. No explanation. No JSON. No markdown."
         )
 
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": (
             f"Database: {req.database_name or 'target'}\n"
-            f"Tables to use: {', '.join(tables_used) if tables_used else 'auto-detect'}\n"
             f"Request: {req.natural_language}"
         )},
     ]
 
-    # ── 4. Call LLM with retry + fallback ─────────────────────
+    # ── 5. Call LLM with retry + fallback ─────────────────────
     raw = ""
     tokens = 0
     model_used_key = model_key
@@ -582,7 +598,9 @@ async def generate(req: GenerateRequest):
 
     try:
         raw, tokens, model_used_key, fallback_used = await call_with_messages(
-            model_key, messages, json_mode=True, fallback_key=fallback_key
+            model_key, messages,
+            json_mode=use_json_prompt,   # only request JSON from cloud models
+            fallback_key=fallback_key
         )
         log.append(f"LLM response received ({tokens} tokens)")
     except RuntimeError as e:
@@ -610,30 +628,35 @@ async def generate(req: GenerateRequest):
             generation_log   = log,
         )
 
-    # ── 5. Parse structured JSON response ─────────────────────
-    cleaned   = strip_fences(raw)
-    query_sql = cleaned          # fallback if JSON parse fails
+    # ── 6. Parse response ────────────────────────────────────
+    cleaned          = strip_fences(raw)
+    query_sql        = cleaned
     explanation_text = ""
     schema_summary   = ""
     deepmap_text     = ""
     confidence_str   = "medium"
     parsed_tables    = tables_used
 
-    try:
-        parsed = json.loads(cleaned)
-        query_sql        = parsed.get("query", cleaned).strip()
-        explanation_text = parsed.get("explanation", "").strip()
-        schema_summary   = parsed.get("schema", "").strip()
-        deepmap_text     = parsed.get("deepmap", "").strip()
-        confidence_str   = parsed.get("confidence", "medium").lower()
-        raw_tables       = parsed.get("tables_used", [])
-        if raw_tables:
-            parsed_tables = raw_tables
-        log.append("✓ Structured JSON parsed successfully")
-    except (json.JSONDecodeError, ValueError):
-        # LLM returned plain SQL — extract what we can
-        log.append("⚠ JSON parse failed — treating response as plain SQL")
+    if use_json_prompt:
+        # Cloud model returned JSON — parse it
+        try:
+            parsed = json.loads(cleaned)
+            query_sql        = parsed.get("query", cleaned).strip()
+            explanation_text = parsed.get("explanation", "").strip()
+            schema_summary   = parsed.get("schema", "").strip()
+            deepmap_text     = parsed.get("deepmap", "").strip()
+            confidence_str   = parsed.get("confidence", "medium").lower()
+            raw_tables       = parsed.get("tables_used", [])
+            if raw_tables:
+                parsed_tables = raw_tables
+            log.append("✓ Structured JSON parsed")
+        except (json.JSONDecodeError, ValueError):
+            log.append("⚠ JSON parse failed — using raw response as SQL")
+            query_sql = cleaned
+    else:
+        # Local model returned plain SQL — use it directly
         query_sql = cleaned
+        log.append("✓ SQL extracted from local model response")
 
     # ── 6. Build rich tab content if LLM didn't return it ─────
     if not explanation_text:
